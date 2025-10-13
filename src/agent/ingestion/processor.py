@@ -147,12 +147,11 @@ class DocumentProcessor:
                         authors,
                         publication_year,
                         num_pages,
-                        source,
                         udr_data,
-                        status,
-                        ingested_at
+                        processing_status,
+                        processed_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -164,9 +163,8 @@ class DocumentProcessor:
                         udr.metadata.authors,
                         udr.metadata.publication_year,
                         udr.metadata.num_pages,
-                        source_name,
                         json.dumps(udr_json),
-                        "ingested",  # Status: ingested (not yet indexed)
+                        "completed",  # Status: completed processing (not yet indexed for search)
                         datetime.now(timezone.utc)
                     )
                 )

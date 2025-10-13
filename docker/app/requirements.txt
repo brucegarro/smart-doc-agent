@@ -27,6 +27,11 @@ Pillow==10.1.0               # Image manipulation
 opencv-python-headless==4.8.1.78  # Computer vision (headless for Docker)
 
 # ------------------------------------------------------------------------------
+# Math OCR (Formula/Equation Extraction)
+# ------------------------------------------------------------------------------
+pix2tex[api]==0.1.2          # LaTeX OCR for extracting formulas from images
+
+# ------------------------------------------------------------------------------
 # NLP & Embeddings
 # ------------------------------------------------------------------------------
 # === Embeddings / Transformers ===

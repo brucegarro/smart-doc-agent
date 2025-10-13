@@ -74,3 +74,6 @@ python-dotenv==1.0.0         # Environment variable management
 # ------------------------------------------------------------------------------
 tenacity==8.2.3              # Retry logic with backoff
 python-json-logger==2.0.7    # Structured logging
+typer==0.9.0                 # CLI framework shared with app
+click==8.1.7                 # Ensure Typer-compatible Click version
+rich==13.7.0                 # Rich output for CLI (keep parity with app)

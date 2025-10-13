@@ -118,10 +118,15 @@ class Table(BaseModel):
     bbox: Optional[BoundingBox] = None
     data: List[List[str]] = Field(default_factory=list)  # 2D array of cells
     text: str  # Fallback text representation
+    subtype: Optional[str] = None  # e.g., "data", "layout", "matrix"
+    confidence: Optional[float] = None
+    caption_id: Optional[str] = None
+    header_rows: Optional[int] = None
+    header_cols: Optional[int] = None
+    artifacts: Dict[str, str] = Field(default_factory=dict)  # e.g., image_uri, csv_uri
     
     # Extraction metadata
     extraction_method: ExtractionMethod = ExtractionMethod.PDFPLUMBER
-    confidence: Optional[float] = None
 
 
 class Figure(BaseModel):
@@ -131,6 +136,10 @@ class Figure(BaseModel):
     page: int
     bbox: Optional[BoundingBox] = None
     s3_key: Optional[str] = None  # S3 path to extracted image
+    subtype: Optional[str] = None  # photo | chart | diagram | vector
+    confidence: Optional[float] = None
+    caption_id: Optional[str] = None
+    artifacts: Dict[str, str] = Field(default_factory=dict)
     
     # Extraction metadata
     extraction_method: ExtractionMethod = ExtractionMethod.PYMUPDF
