@@ -1,0 +1,69 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+
+# Documentation (not needed in container)
+docs/
+*.md
+LICENSE
+
+# Data and models (large files - use volumes instead)
+data/
+models/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.parquet
+*.csv
+*.db
+*.sqlite
+
+# Jupyter
+.ipynb_checkpoints
+notebooks/
+
+# Environment
+.env
+.env.local
+.env.example
+
+# Sample files
+sample_papers/

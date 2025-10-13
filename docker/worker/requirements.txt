@@ -1,0 +1,75 @@
+# ==============================================================================
+# Smart Doc Agent - Worker Service Requirements (LEAN)
+# ==============================================================================
+# Purpose: Background processing for ingestion, extraction, indexing
+# Python: 3.11+
+# Device: Supports CPU, MPS (Apple Silicon), CUDA
+# Strategy: Minimal dependencies, no CLI/API frameworks
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# PDF Processing & Text Extraction
+# ------------------------------------------------------------------------------
+PyMuPDF==1.23.8              # Fast PDF parsing with layout preservation
+pdfplumber==0.10.3           # Table extraction and detailed layout analysis
+pypdf==3.17.4                # PDF manipulation and metadata extraction
+
+# ------------------------------------------------------------------------------
+# OCR (Optical Character Recognition)
+# ------------------------------------------------------------------------------
+paddleocr==2.7.3             # PaddlePaddle OCR (primary OCR engine)
+paddlepaddle==2.6.0          # PaddlePaddle framework (CPU version)
+
+# ------------------------------------------------------------------------------
+# Computer Vision & Image Processing
+# ------------------------------------------------------------------------------
+Pillow==10.1.0               # Image manipulation
+opencv-python-headless==4.8.1.78  # Computer vision (headless for Docker)
+
+# ------------------------------------------------------------------------------
+# NLP & Embeddings
+# ------------------------------------------------------------------------------
+# === Embeddings / Transformers ===
+sentence-transformers>=2.7.0,<3.0.0
+torch==2.1.2
+transformers==4.36.2
+numpy<2.0.0  # sentence-transformers compatibility
+
+# ------------------------------------------------------------------------------
+# Database & Vector Store
+# ------------------------------------------------------------------------------
+psycopg[binary]==3.1.16      # PostgreSQL driver with binary protocol
+sqlalchemy==2.0.25           # ORM and database toolkit
+pgvector==0.2.4              # PostgreSQL vector extension client
+alembic==1.13.1              # Database migrations
+
+# ------------------------------------------------------------------------------
+# Object Storage (S3/MinIO)
+# ------------------------------------------------------------------------------
+boto3==1.34.25               # AWS SDK (MinIO compatible)
+minio==7.2.3                 # MinIO Python client
+
+# ------------------------------------------------------------------------------
+# Redis & Job Queues
+# ------------------------------------------------------------------------------
+redis==5.0.1                 # Redis client
+rq==1.15.1                   # Redis Queue for background jobs
+
+# ------------------------------------------------------------------------------
+# HTTP Client (for Ollama VLM calls)
+# ------------------------------------------------------------------------------
+httpx>=0.25.2,<0.28.0        # Async HTTP client (compatible with ollama and paddlepaddle)
+ollama>=0.1.0                # Ollama Python client
+
+# ------------------------------------------------------------------------------
+# Data Handling & Validation
+# ------------------------------------------------------------------------------
+pydantic==2.5.3              # Data validation and settings
+pydantic-settings==2.1.0     # Settings management
+python-dotenv==1.0.0         # Environment variable management
+
+# ------------------------------------------------------------------------------
+# Utilities
+# ------------------------------------------------------------------------------
+tenacity==8.2.3              # Retry logic with backoff
+python-json-logger==2.0.7    # Structured logging
