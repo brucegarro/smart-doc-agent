@@ -39,6 +39,7 @@ numpy<2.0.0  # sentence-transformers compatibility
 # Database & Vector Store
 # ------------------------------------------------------------------------------
 psycopg[binary]==3.1.16      # PostgreSQL driver with binary protocol
+psycopg-pool==3.2.0          # Connection pooling for psycopg
 sqlalchemy==2.0.25           # ORM and database toolkit
 pgvector==0.2.4              # PostgreSQL vector extension client
 alembic==1.13.1              # Database migrations

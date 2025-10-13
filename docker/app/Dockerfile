@@ -80,6 +80,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 # Copy application source code
 # In dev mode, this will be overridden by volume mount
 COPY src /app
+COPY scripts /app/scripts
 
 # Create data directories
 RUN mkdir -p /data/uploads /data/exports /data/cache

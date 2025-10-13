@@ -111,6 +111,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./src:/app:cached                      # dev bind mount for code
+      - ./scripts:/app/scripts:cached          # dev bind mount for scripts
+      - ./sample_papers:/app/sample_papers:cached  # sample papers for testing
       - data:/data                             # inputs/outputs
       - models:/root/.cache/huggingface        # share HF cache
     ports:
