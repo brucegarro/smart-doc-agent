@@ -115,6 +115,8 @@ services:
       - ./sample_papers:/app/sample_papers:cached  # sample papers for testing
       - data:/data                             # inputs/outputs
       - models:/root/.cache/huggingface        # share HF cache
+      - models:/root/.paddleocr                # share PaddleOCR cache
+      - pix2tex-cache:/usr/local/lib/python3.11/site-packages/pix2tex/model/checkpoints  # persist LaTeX OCR weights
     ports:
       - "${APP_PORT:-8080}:8080"  # API endpoint (future)
     stdin_open: true
@@ -172,6 +174,7 @@ services:
       - data:/data
       - models:/root/.cache/huggingface
       - models:/root/.paddleocr                # PaddleOCR model cache
+      - pix2tex-cache:/usr/local/lib/python3.11/site-packages/pix2tex/model/checkpoints  # persist LaTeX OCR weights
     deploy:
       resources:
         limits:
@@ -224,3 +227,5 @@ volumes:
     driver: local  # shared cache for Ollama + HF models + PaddleOCR
   data:
     driver: local  # user docs in/out, exports, etc.
+  pix2tex-cache:
+    driver: local  # shared cache for pix2tex weights

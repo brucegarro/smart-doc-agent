@@ -7,6 +7,7 @@ Implements revised component design:
 - Layer 4: Structure Parser (pages → blocks → spans → relations)
 """
 
+import base64
 import io
 import logging
 import re
@@ -21,6 +22,7 @@ import pdfplumber
 from PIL import Image
 from pypdf import PdfReader
 
+from agent.config import settings
 from agent.ingestion.udr import (
     BoundingBox,
     DocumentMetadata,
@@ -39,6 +41,11 @@ from agent.ingestion.udr import (
 
 logger = logging.getLogger(__name__)
 
+try:  # Optional multimodal model client
+    from ollama import Client as OllamaClient  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    OllamaClient = None  # type: ignore
+
 # Page type detection thresholds
 DIGITAL_TEXT_THRESHOLD = 200  # Minimum text length for digital page
 DIGITAL_IMAGE_COVERAGE_THRESHOLD = 0.3  # Maximum image coverage for digital page
@@ -48,6 +55,18 @@ IMAGE_AREA_ESTIMATE = 0.1  # Rough estimate of image area as fraction of page
 
 CAPTION_REGEX = re.compile(r'(?i)\b(fig(?:ure)?|tbl|table)\s*([0-9]+[A-Za-z]?)')
 CAPTION_MAX_DISTANCE = 120  # Points distance to associate captions with regions
+
+# Geometric thresholds for reliable table detection
+MIN_TABLE_WIDTH = 120.0   # points (~1.6in)
+MIN_TABLE_HEIGHT = 80.0   # points (~1.1in)
+MIN_TABLE_ASPECT_RATIO = 0.2  # prevent ultra-narrow tables (w / h)
+MAX_TABLE_ASPECT_RATIO = 5.0  # prevent ultra-flat tables
+
+# Vision-language (Qwen-VL) analysis settings
+VLM_MAX_TABLES = 4
+VLM_MAX_FIGURES = 4
+VLM_RENDER_SCALE = 2.0
+VLM_RENDER_PADDING = 8.0
 
 
 @dataclass
@@ -153,6 +172,8 @@ class PDFParser:
         self._layout_cache: Dict[int, List[LayoutDetection]] = {}
         self._latex_ocr = None
         self._latex_ocr_failed = False
+        self._vlm_client = None
+        self._vlm_unavailable = False
     
     def close(self):
         """Close all PDF readers."""
@@ -197,6 +218,177 @@ class PDFParser:
             self._latex_ocr = None
 
         return self._latex_ocr
+
+    def _ensure_vlm_client(self):
+        """Lazily initialize Ollama client for Qwen-VL analysis."""
+        if self._vlm_unavailable:
+            return None
+
+        if self._vlm_client is not None:
+            return self._vlm_client
+
+        if OllamaClient is None:
+            logger.warning("Qwen-VL analysis disabled (ollama package unavailable)")
+            self._vlm_unavailable = True
+            return None
+
+        try:
+            self._vlm_client = OllamaClient(host=settings.ollama_base)
+            logger.debug("Initialized Qwen-VL client via Ollama")
+        except Exception as exc:  # pragma: no cover - optional best-effort dependency
+            logger.warning(f"Qwen-VL analysis disabled (client error): {exc}")
+            self._vlm_client = None
+            self._vlm_unavailable = True
+
+        return self._vlm_client
+
+    def _render_bbox_to_png(self, page_num: int, bbox: BoundingBox) -> Optional[bytes]:
+        """Render a bounding box region to PNG bytes for vision analysis."""
+        try:
+            page = self.fitz_doc[page_num - 1]
+        except Exception as exc:
+            logger.warning(f"Failed to access page {page_num} for vision crop: {exc}")
+            return None
+
+        page_rect = page.rect
+        rect = fitz.Rect(bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+
+        padded = fitz.Rect(
+            max(page_rect.x0, rect.x0 - VLM_RENDER_PADDING),
+            max(page_rect.y0, rect.y0 - VLM_RENDER_PADDING),
+            min(page_rect.x1, rect.x1 + VLM_RENDER_PADDING),
+            min(page_rect.y1, rect.y1 + VLM_RENDER_PADDING),
+        )
+
+        if padded.width <= 0 or padded.height <= 0:
+            return None
+
+        try:
+            matrix = fitz.Matrix(VLM_RENDER_SCALE, VLM_RENDER_SCALE)
+            pix = page.get_pixmap(matrix=matrix, clip=padded, alpha=False)
+            return pix.tobytes("png")
+        except Exception as exc:
+            logger.warning(f"Failed to render crop on page {page_num}: {exc}")
+            return None
+
+    def _analyze_image_with_vlm(self, image_bytes: bytes, prompt: str) -> Optional[str]:
+        """Send a cropped region to Qwen-VL for analysis."""
+        if not image_bytes:
+            return None
+
+        client = self._ensure_vlm_client()
+        if client is None:
+            return None
+
+        try:
+            encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        except Exception as exc:
+            logger.warning(f"Failed to encode image for Qwen-VL: {exc}")
+            return None
+
+        try:
+            response = client.chat(
+                model=settings.vlm_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": [encoded_image],
+                    }
+                ],
+            )
+        except Exception as exc:  # pragma: no cover - network dependency
+            logger.warning(f"Qwen-VL analysis failed: {exc}")
+            return None
+
+        message = response.get("message") if isinstance(response, dict) else None
+        if not message:
+            return None
+
+        content = message.get("content")
+        if isinstance(content, str):
+            stripped = content.strip()
+            return stripped or None
+
+        return None
+
+    def _build_table_prompt(self, table: Table) -> str:
+        """Create prompt for table-focused vision analysis."""
+        prompt_lines = [
+            "You are examining a cropped table from a scientific paper.",
+            "Summarize the table in 2-3 sentences, mentioning column/row semantics and any notable values.",
+            "If the table is unreadable, say so explicitly.",
+        ]
+
+        if table.caption:
+            prompt_lines.append(f"Paper caption: {table.caption}")
+
+        return "\n".join(prompt_lines)
+
+    def _build_figure_prompt(self, figure: Figure) -> str:
+        """Create prompt for figure-focused vision analysis."""
+        prompt_lines = [
+            "You are examining a cropped figure from a scientific paper.",
+            "Describe what the figure shows in up to 3 sentences, noting axes, trends, or key elements.",
+            "If the figure is unclear, state that explicitly.",
+        ]
+
+        if figure.caption:
+            prompt_lines.append(f"Paper caption: {figure.caption}")
+
+        return "\n".join(prompt_lines)
+
+    def _enrich_visual_elements_with_vlm(self, tables: List[Table], figures: List[Figure]) -> None:
+        """Attach Qwen-VL analysis outputs to tables and figures."""
+        if self._vlm_unavailable:
+            return
+
+        if not tables and not figures:
+            return
+
+        if self._ensure_vlm_client() is None:
+            return
+
+        processed_any = False
+
+        for idx, table in enumerate(tables):
+            if idx >= VLM_MAX_TABLES:
+                break
+            if not table.bbox:
+                continue
+
+            image_bytes = self._render_bbox_to_png(table.page, table.bbox)
+            if not image_bytes:
+                continue
+
+            prompt = self._build_table_prompt(table)
+            summary = self._analyze_image_with_vlm(image_bytes, prompt)
+            if summary:
+                table.artifacts["qwen_vl_summary"] = summary
+                table.artifacts["qwen_vl_prompt"] = prompt
+                table.artifacts["qwen_vl_model"] = settings.vlm_model
+                processed_any = True
+
+        for idx, figure in enumerate(figures):
+            if idx >= VLM_MAX_FIGURES:
+                break
+            if not figure.bbox:
+                continue
+
+            image_bytes = self._render_bbox_to_png(figure.page, figure.bbox)
+            if not image_bytes:
+                continue
+
+            prompt = self._build_figure_prompt(figure)
+            description = self._analyze_image_with_vlm(image_bytes, prompt)
+            if description:
+                figure.artifacts["qwen_vl_description"] = description
+                figure.artifacts["qwen_vl_prompt"] = prompt
+                figure.artifacts["qwen_vl_model"] = settings.vlm_model
+                processed_any = True
+
+        if processed_any:
+            self.extraction_methods.add(ExtractionMethod.QWEN_VL)
 
     def _analyze_document_layout(self) -> Dict[int, List[LayoutDetection]]:
         """Run layout analysis for the full document (cached)."""
@@ -380,6 +572,9 @@ class PDFParser:
         # Extract tables and figures using multi-signal fusion
         tables = self._extract_tables(layout_by_page, captions_by_page)
         figures = self._extract_figures(layout_by_page, captions_by_page)
+
+        # Use vision-language model to analyze visual regions when available
+        self._enrich_visual_elements_with_vlm(tables, figures)
 
         # Extract equations (still heuristic-based with optional OCR)
         equations = self._extract_equations()
@@ -1140,6 +1335,30 @@ class PDFParser:
 
         tables: List[Table] = []
         for idx, candidate in enumerate(table_candidates):
+            rect_width = candidate.bbox.width
+            rect_height = candidate.bbox.height
+
+            if rect_width < MIN_TABLE_WIDTH or rect_height < MIN_TABLE_HEIGHT:
+                logger.debug(
+                    "Skipping table candidate on page %s (width=%.1f, height=%.1f)",
+                    candidate.page,
+                    rect_width,
+                    rect_height,
+                )
+                continue
+
+            if rect_height == 0:
+                continue
+
+            aspect_ratio = rect_width / rect_height
+            if aspect_ratio < MIN_TABLE_ASPECT_RATIO or aspect_ratio > MAX_TABLE_ASPECT_RATIO:
+                logger.debug(
+                    "Skipping table candidate on page %s due to aspect ratio %.2f",
+                    candidate.page,
+                    aspect_ratio,
+                )
+                continue
+
             text_lines: List[str] = []
             normalized_data = normalize_table_data(candidate.data)
             if normalized_data:
