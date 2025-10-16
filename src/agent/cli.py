@@ -1,7 +1,12 @@
 """CLI interface for smart-doc-agent."""
 
+import cProfile
+import io
 import logging
+import os
+import pstats
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +16,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from agent.ingestion.processor import processor
+from agent.retrieval.search import search_chunks
 
 # Configure logging with Rich
 logging.basicConfig(
@@ -28,6 +34,57 @@ app = typer.Typer(
 )
 
 console = Console()
+
+PROFILE_DEFAULT_PATH = Path("/tmp/ingest.prof")
+
+
+def _emit_profile_summary(profiler: Optional[cProfile.Profile]) -> None:
+    """Print a concise cProfile summary if profiling data exists."""
+    stats_path = Path(os.environ.get("SMART_DOC_AGENT_PROFILE_PATH", str(PROFILE_DEFAULT_PATH)))
+
+    stats_obj: Optional[pstats.Stats] = None
+
+    if profiler is not None:
+        try:
+            profiler.dump_stats(str(stats_path))
+        except Exception as exc:  # pragma: no cover - best effort persistence
+            logger.debug("Unable to write profile stats: %s", exc)
+        stats_obj = pstats.Stats(profiler)
+    elif stats_path.exists():
+        try:
+            stats_obj = pstats.Stats(str(stats_path))
+        except Exception as exc:  # pragma: no cover - best effort parsing
+            logger.debug("Skipping profile summary: %s", exc)
+            return
+    else:
+        return
+
+    if stats_obj is None:
+        return
+
+    try:
+        top_n = int(os.environ.get("SMART_DOC_AGENT_PROFILE_TOP", "25"))
+    except ValueError:
+        top_n = 25
+
+    sort_key = os.environ.get("SMART_DOC_AGENT_PROFILE_SORT", "cumulative")
+
+    stats_obj.strip_dirs().sort_stats(sort_key)
+    buffer = io.StringIO()
+    stats_obj.stream = buffer
+    stats_obj.print_stats(top_n)
+
+    logger.debug(
+        "Profiler summary ready (source: %s)",
+        "in-memory" if profiler is not None else str(stats_path),
+    )
+
+    console.print("\nProfiler Summary\n", style="bold magenta")
+    console.print(buffer.getvalue(), markup=False, highlight=False)
+
+    if os.environ.get("SMART_DOC_AGENT_PROFILE_DELETE", "0") == "1":
+        with suppress(OSError):
+            stats_path.unlink()
 
 
 @app.command()
@@ -61,67 +118,81 @@ def ingest(
     
     Extracts text, metadata, tables, and stores in database with vector embeddings.
     """
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
-    console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
-    
-    # Collect PDF files
-    pdf_files = []
-    
-    if path.is_file():
-        if path.suffix.lower() == ".pdf":
-            pdf_files.append(path)
-        else:
-            console.print(f"[red]Error: {path} is not a PDF file[/red]")
-            raise typer.Exit(1)
-    
-    elif path.is_dir():
-        pattern = "**/*.pdf" if recursive else "*.pdf"
-        pdf_files = list(path.glob(pattern))
-        
-        if not pdf_files:
-            console.print(f"[yellow]No PDF files found in {path}[/yellow]")
-            raise typer.Exit(0)
-    
-    console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
-    
-    # Process each PDF
-    results = {
-        "success": [],
-        "failed": [],
-        "skipped": []
-    }
-    
-    for idx, pdf_file in enumerate(pdf_files, start=1):
-        console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
-        
-        try:
-            doc_id = processor.process_pdf(pdf_file, source_name=source)
-            results["success"].append((pdf_file.name, doc_id))
-            console.print(f"  ✓ Success → [green]{doc_id}[/green]\n")
-        
-        except ValueError as e:
-            # Document already exists
-            results["skipped"].append((pdf_file.name, str(e)))
-            console.print(f"  ⊘ Skipped: [yellow]{e}[/yellow]\n")
-        
-        except Exception as e:
-            results["failed"].append((pdf_file.name, str(e)))
-            console.print(f"  ✗ Failed: [red]{e}[/red]\n")
-            if verbose:
-                logger.exception("Processing failed")
-    
-    # Summary
-    console.print("\n[bold]Summary[/bold]")
-    console.print(f"  ✓ Success: [green]{len(results['success'])}[/green]")
-    console.print(f"  ⊘ Skipped: [yellow]{len(results['skipped'])}[/yellow]")
-    console.print(f"  ✗ Failed:  [red]{len(results['failed'])}[/red]")
-    
-    if results["failed"]:
-        console.print("\n[bold red]Failed documents:[/bold red]")
-        for filename, error in results["failed"]:
-            console.print(f"  • {filename}: {error}")
+    profiler: Optional[cProfile.Profile] = None
+    if os.environ.get("SMART_DOC_AGENT_PROFILE", "0") == "1":
+        profiler = cProfile.Profile()
+        profiler.enable()
+        logger.debug(
+            "Profiling enabled (output path: %s)",
+            os.environ.get("SMART_DOC_AGENT_PROFILE_PATH", str(PROFILE_DEFAULT_PATH)),
+        )
+
+    try:
+        if verbose:
+            logging.getLogger().setLevel(logging.DEBUG)
+
+        console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
+
+        # Collect PDF files
+        pdf_files = []
+
+        if path.is_file():
+            if path.suffix.lower() == ".pdf":
+                pdf_files.append(path)
+            else:
+                console.print(f"[red]Error: {path} is not a PDF file[/red]")
+                raise typer.Exit(1)
+
+        elif path.is_dir():
+            pattern = "**/*.pdf" if recursive else "*.pdf"
+            pdf_files = list(path.glob(pattern))
+
+            if not pdf_files:
+                console.print(f"[yellow]No PDF files found in {path}[/yellow]")
+                raise typer.Exit(0)
+
+        console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
+
+        # Process each PDF
+        results = {
+            "success": [],
+            "failed": [],
+            "skipped": []
+        }
+
+        for idx, pdf_file in enumerate(pdf_files, start=1):
+            console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
+
+            try:
+                doc_id = processor.process_pdf(pdf_file, source_name=source)
+                results["success"].append((pdf_file.name, doc_id))
+                console.print(f"  ✓ Success → [green]{doc_id}[/green]\n")
+
+            except ValueError as e:
+                # Document already exists
+                results["skipped"].append((pdf_file.name, str(e)))
+                console.print(f"  ⊘ Skipped: [yellow]{e}[/yellow]\n")
+
+            except Exception as e:
+                results["failed"].append((pdf_file.name, str(e)))
+                console.print(f"  ✗ Failed: [red]{e}[/red]\n")
+                if verbose:
+                    logger.exception("Processing failed")
+
+        # Summary
+        console.print("\n[bold]Summary[/bold]")
+        console.print(f"  ✓ Success: [green]{len(results['success'])}[/green]")
+        console.print(f"  ⊘ Skipped: [yellow]{len(results['skipped'])}[/yellow]")
+        console.print(f"  ✗ Failed:  [red]{len(results['failed'])}[/red]")
+
+        if results["failed"]:
+            console.print("\n[bold red]Failed documents:[/bold red]")
+            for filename, error in results["failed"]:
+                console.print(f"  • {filename}: {error}")
+    finally:
+        if profiler is not None:
+            profiler.disable()
+        _emit_profile_summary(profiler)
 
 
 @app.command()
@@ -212,6 +283,67 @@ def status(
 def version():
     """Show version information."""
     console.print("[cyan]smart-doc-agent[/cyan] v0.1.0")
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(
+        ...,
+        help="Text to search for"
+    ),
+    limit: int = typer.Option(
+        5,
+        "--limit",
+        "-n",
+        help="Number of chunks to return"
+    ),
+    include_tables: bool = typer.Option(
+        False,
+        "--include-tables",
+        help="Include table and figure chunks"
+    )
+):
+    """Search indexed chunks and show the closest matches."""
+
+    console.print("\n[bold blue]Similarity Search[/bold blue]\n")
+
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    logging.getLogger("agent.embedding.embedder").setLevel(logging.WARNING)
+
+    try:
+        content_types = None if include_tables else ("text",)
+        results = search_chunks(
+            query,
+            limit=limit,
+            content_types=content_types,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not results:
+        console.print("[yellow]No matching chunks found[/yellow]")
+        return
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("#", justify="right", width=3)
+    table.add_column("Score", justify="right", width=7)
+    table.add_column("Page", justify="right", width=6)
+    table.add_column("Type", width=8)
+    table.add_column("Chunk", justify="right", width=6)
+    table.add_column("Snippet", overflow="fold")
+
+    for rank, item in enumerate(results, start=1):
+        table.add_row(
+            str(rank),
+            f"{item.cosine_similarity:.3f}",
+            str(item.page_number),
+            item.content_type,
+            str(item.chunk_index),
+            item.snippet or "-",
+        )
+
+    console.print(table)
 
 
 def main():

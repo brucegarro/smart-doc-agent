@@ -11,6 +11,7 @@ import base64
 import io
 import logging
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,9 @@ DIGITAL_IMAGE_COVERAGE_THRESHOLD = 0.3  # Maximum image coverage for digital pag
 SCANNED_TEXT_THRESHOLD = 50  # Maximum text length for scanned page
 SCANNED_IMAGE_COVERAGE_THRESHOLD = 0.5  # Minimum image coverage for scanned page
 IMAGE_AREA_ESTIMATE = 0.1  # Rough estimate of image area as fraction of page
+
+REFERENCE_HEADING_PATTERN = re.compile(r"\b(references?|bibliography|works cited)\b", re.IGNORECASE)
+REFERENCE_ENTRY_START_PATTERN = re.compile(r"^\s*(?:\[\d+\]|\(?\d+\)?[\.)])\s+")
 
 CAPTION_REGEX = re.compile(r'(?i)\b(fig(?:ure)?|tbl|table)\s*([0-9]+[A-Za-z]?)')
 CAPTION_MAX_DISTANCE = 120  # Points distance to associate captions with regions
@@ -552,35 +556,78 @@ class PDFParser:
             UnifiedDocumentRepresentation with pages → blocks → spans structure
         """
         logger.info(f"Parsing PDF: {self.pdf_path.name}")
-        
+
+        timings: Dict[str, float] = {}
+        overall_start = time.perf_counter()
+        step_start = overall_start
+
+        def log_timing(label: str, key: str) -> None:
+            logger.info("%s timings (s) | %s=%.2f", label, key, timings.get(key, 0.0))
+
         # Extract metadata
         metadata = self._extract_metadata()
-        
+        now = time.perf_counter()
+        timings["metadata"] = now - step_start
+        log_timing("Metadata", "metadata")
+        step_start = now
+
         # Extract pages with hierarchical structure
         pages, ocr_pages = self._extract_pages_with_blocks()
-        
+        now = time.perf_counter()
+        timings["pages"] = now - step_start
+        log_timing("Pages", "pages")
+        step_start = now
+
         # Build legacy raw text list (backward compatibility)
         raw_page_texts = [page.text for page in pages]
-        
+
         # Extract sections (heuristic-based from headings)
         sections = self._extract_sections_from_blocks(pages)
+        now = time.perf_counter()
+        timings["sections"] = now - step_start
+        log_timing("Sections", "sections")
+        step_start = now
 
         # Analyze layout (vision-based) and captions for downstream detection
         layout_by_page = self._analyze_document_layout()
         captions_by_page = self._collect_captions()
+        now = time.perf_counter()
+        timings["layout"] = now - step_start
+        log_timing("Layout", "layout")
+        step_start = now
 
         # Extract tables and figures using multi-signal fusion
         tables = self._extract_tables(layout_by_page, captions_by_page)
+        now = time.perf_counter()
+        timings["tables"] = now - step_start
+        log_timing("Tables", "tables")
+        step_start = now
+
         figures = self._extract_figures(layout_by_page, captions_by_page)
+        now = time.perf_counter()
+        timings["figures"] = now - step_start
+        log_timing("Figures", "figures")
+        step_start = now
 
         # Use vision-language model to analyze visual regions when available
         self._enrich_visual_elements_with_vlm(tables, figures)
+        now = time.perf_counter()
+        timings["vlm_enrichment"] = now - step_start
+        log_timing("VLM enrichment", "vlm_enrichment")
+        step_start = now
 
         # Extract equations (still heuristic-based with optional OCR)
         equations = self._extract_equations()
-        
-        # Extract references (stub for now)
-        references = self._extract_references()
+        now = time.perf_counter()
+        timings["equations"] = now - step_start
+        log_timing("Equations", "equations")
+        step_start = now
+
+        # Extract references
+        references = self._extract_references(pages)
+        now = time.perf_counter()
+        timings["references"] = now - step_start
+        log_timing("References", "references")
         
         # Update metadata with page type distribution
         metadata.num_digital_pages = sum(1 for p in pages if p.page_type == PageType.DIGITAL)
@@ -608,6 +655,11 @@ class PDFParser:
             f"{len(tables)} tables, "
             f"{sum(len(p.blocks) for p in pages)} blocks"
         )
+
+        total_duration = time.perf_counter() - overall_start
+        timings["total"] = total_duration
+
+        log_timing("Total", "total")
         
         return udr
     
@@ -1593,17 +1645,87 @@ class PDFParser:
         
         return True
     
-    def _extract_references(self) -> List[Reference]:
-        """Extract references (stub for now)."""
-        logger.debug("Extracting references (stub)")
-        
-        # TODO: Implement reference extraction
-        # - Find References/Bibliography section
-        # - Parse individual citations
-        # - Extract author, title, year, venue, DOI
-        
-        references = []
-        
+    def _extract_references(self, pages: List[Page]) -> List[Reference]:
+        """Extract reference entries from detected reference section."""
+        logger.debug("Extracting references")
+
+        references: List[Reference] = []
+        collecting = False
+        current_text: List[str] = []
+        current_page: Optional[int] = None
+        ref_counter = 1
+
+        def finalize_current() -> None:
+            nonlocal current_text, current_page, ref_counter
+            if not current_text:
+                return
+            text = re.sub(r"\s+", " ", " ".join(current_text)).strip()
+            if not text:
+                current_text = []
+                current_page = None
+                return
+            reference = Reference(
+                reference_id=f"ref_{ref_counter}",
+                text=text,
+                page=current_page,
+            )
+            references.append(reference)
+            ref_counter += 1
+            current_text = []
+            current_page = None
+
+        for page in pages:
+            for block in page.blocks:
+                block_text = (block.text or "").strip()
+                if not block_text:
+                    continue
+
+                if block.block_type == "heading":
+                    if REFERENCE_HEADING_PATTERN.search(block_text):
+                        logger.debug("Detected references section heading: '%s'", block_text)
+                        finalize_current()
+                        collecting = True
+                        current_text = []
+                        current_page = None
+                        continue
+                    if collecting:
+                        finalize_current()
+                        collecting = False
+                        # Once we leave references section we stop scanning further headings
+                        break
+                    continue
+
+                if not collecting:
+                    continue
+
+                # Only process paragraph or list-like content for references
+                if block.block_type not in {"paragraph", "list"}:
+                    continue
+
+                normalized = re.sub(r"\s+", " ", block_text).strip()
+                if not normalized:
+                    continue
+
+                if current_text and REFERENCE_ENTRY_START_PATTERN.match(normalized):
+                    finalize_current()
+
+                if not current_text:
+                    current_page = page.page_num
+
+                current_text.append(normalized)
+
+            else:
+                # Only executed if inner loop wasn't broken; continue to next page
+                continue
+            # Inner loop was broken (likely due to leaving references)
+            break
+
+        finalize_current()
+
+        if references:
+            self.extraction_methods.add(ExtractionMethod.HEURISTIC)
+
+        logger.debug("Extracted %d reference(s)", len(references))
         return references
 
 
