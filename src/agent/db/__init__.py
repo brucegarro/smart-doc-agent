@@ -9,6 +9,8 @@ from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from pgvector.psycopg import register_vector
+
 from agent.config import settings
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,10 @@ class DatabaseManager:
             self.initialize()
         
         with self._pool.connection() as conn:
+            try:
+                register_vector(conn)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("Failed to register pgvector adapter: %s", exc)
             yield conn
     
     @contextmanager

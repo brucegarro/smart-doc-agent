@@ -52,3 +52,5 @@ htmlcov/
 
 # Node modules (if using any JS tools)
 node_modules/
+
+sample_papers/ingested/

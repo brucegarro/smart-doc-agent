@@ -178,6 +178,7 @@ class Reference(BaseModel):
     venue: Optional[str] = None
     doi: Optional[str] = None
     url: Optional[str] = None
+    page: Optional[int] = None
 
 
 class DocumentMetadata(BaseModel):

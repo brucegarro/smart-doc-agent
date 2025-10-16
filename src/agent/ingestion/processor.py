@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
+from psycopg.types.json import Json
+
 from agent.config import settings
+from agent.embedding import ChunkPayload, build_chunks, embedding_client
 from agent.db import get_db_connection
 from agent.ingestion.pdf_parser import parse_pdf
 from agent.ingestion.udr import UnifiedDocumentRepresentation
@@ -57,6 +60,8 @@ class DocumentProcessor:
         doc_id = str(uuid4())
         logger.debug(f"Generated doc_id: {doc_id}")
         
+        s3_key: Optional[str] = None
+
         try:
             # 1. Parse PDF
             logger.info("Step 1/3: Parsing PDF...")
@@ -82,6 +87,12 @@ class DocumentProcessor:
                 source_name=source_name
             )
             
+            # 4. Generate retrieval chunks + embeddings
+            logger.info("Step 4/4: Generating retrieval chunks and embeddings...")
+            final_status = self._create_chunks_and_embeddings(doc_id, udr)
+            if final_status:
+                self._update_document_status(doc_id, final_status)
+
             logger.info(f"✓ Successfully processed: {pdf_path.name} → {doc_id}")
             
             return doc_id
@@ -164,7 +175,7 @@ class DocumentProcessor:
                         udr.metadata.publication_year,
                         udr.metadata.num_pages,
                         json.dumps(udr_json),
-                        "completed",  # Status: completed processing (not yet indexed for search)
+                        "ingested",
                         datetime.now(timezone.utc)
                     )
                 )
@@ -173,6 +184,129 @@ class DocumentProcessor:
                 
                 logger.debug(f"Inserted document {doc_id} into database")
     
+    def _create_chunks_and_embeddings(
+        self,
+        doc_id: str,
+        udr: UnifiedDocumentRepresentation,
+    ) -> Optional[str]:
+        """Build retrieval chunks, generate embeddings, and persist them."""
+        try:
+            chunks = build_chunks(udr)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to build chunks for %s: %s", doc_id, exc, exc_info=True)
+            return None
+
+        if not chunks:
+            logger.warning("No retrieval chunks generated for document %s", doc_id)
+            return "ingested"
+
+        embeddings_ready = self._generate_embeddings(chunks)
+        self._insert_chunks(doc_id, chunks)
+
+        return "indexed" if embeddings_ready else "chunked"
+
+    def _generate_embeddings(self, chunks: list[ChunkPayload]) -> bool:
+        """Populate in-memory chunk payloads with embeddings."""
+        if not chunks:
+            return False
+
+        contents = [chunk.content for chunk in chunks]
+        vectors = embedding_client.embed(contents)
+        if vectors is None:
+            logger.warning("Embedding client unavailable; storing chunks without vectors")
+            return False
+
+        if len(vectors) != len(chunks):
+            logger.warning(
+                "Embedding client returned %s vectors for %s chunks",
+                len(vectors),
+                len(chunks),
+            )
+            return False
+
+        assigned = 0
+        for chunk, vector in zip(chunks, vectors):
+            if vector:
+                chunk.embedding = vector
+                assigned += 1
+
+        if assigned == 0:
+            logger.warning("No embeddings generated (all chunks empty?)")
+            return False
+
+        logger.debug("Generated embeddings for %s chunk(s)", assigned)
+        return True
+
+    def _insert_chunks(self, doc_id: str, chunks: list[ChunkPayload]) -> None:
+        """Persist chunk payloads into the chunks table."""
+        if not chunks:
+            return
+
+        records = []
+        for chunk in chunks:
+            vector = chunk.embedding if chunk.embedding else None
+            records.append(
+                (
+                    doc_id,
+                    chunk.content,
+                    chunk.content_type,
+                    chunk.chunk_index,
+                    chunk.page_number,
+                    chunk.section_title,
+                    chunk.token_count,
+                    chunk.char_count,
+                    vector,
+                    Json(chunk.metadata),
+                )
+            )
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO chunks (
+                        document_id,
+                        content,
+                        content_type,
+                        chunk_index,
+                        page_number,
+                        section_title,
+                        token_count,
+                        char_count,
+                        embedding,
+                        metadata
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    records,
+                )
+                conn.commit()
+
+        logger.info("Persisted %s chunk(s) for document %s", len(records), doc_id)
+
+    def _update_document_status(self, doc_id: str, status: str) -> None:
+        """Update the processing status for a document."""
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                if status == "indexed":
+                    cur.execute(
+                        """
+                        UPDATE documents
+                        SET processing_status = %s,
+                            processed_at = COALESCE(processed_at, NOW())
+                        WHERE id = %s
+                        """,
+                        (status, doc_id),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE documents SET processing_status = %s WHERE id = %s",
+                        (status, doc_id),
+                    )
+
+                conn.commit()
+
     def get_document_status(self, doc_id: str) -> Optional[dict]:
         """
         Get processing status of a document.

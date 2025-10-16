@@ -1,0 +1,103 @@
+"""Vector similarity search helpers."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence
+
+from agent.db import get_db_connection
+from agent.embedding.embedder import embedding_client
+
+_whitespace_re = re.compile(r"\s+")
+
+
+@dataclass
+class ChunkResult:
+    """Represents a chunk returned from similarity search."""
+
+    chunk_index: int
+    page_number: int
+    content_type: str
+    snippet: str
+    cosine_similarity: float
+
+
+def _vector_literal(values: Sequence[float]) -> str:
+    # Build pgvector literal from raw floats.
+    return "[" + ",".join(repr(value) for value in values) + "]"
+
+
+def _clean_snippet(snippet: Optional[str], *, max_length: int = 200) -> str:
+    if not snippet:
+        return ""
+    collapsed = _whitespace_re.sub(" ", snippet).strip()
+    if len(collapsed) <= max_length:
+        return collapsed
+    return collapsed[: max_length - 3].rstrip() + "..."
+
+
+def search_chunks(
+    query: str,
+    *,
+    limit: int = 5,
+    content_types: Optional[Iterable[str]] = ("text",),
+) -> List[ChunkResult]:
+    """Search for similar chunks given free-text query."""
+
+    if not query.strip():
+        raise ValueError("Query cannot be empty")
+    if limit <= 0:
+        raise ValueError("Limit must be positive")
+
+    embeddings = embedding_client.embed([query])
+    if not embeddings or not embeddings[0]:
+        raise ValueError("Failed to generate embedding for query")
+
+    vector = embeddings[0]
+    vector_value = _vector_literal(vector)
+
+    filter_clause = ""
+    params: List[object] = [vector_value]
+
+    if content_types:
+        types_list = list(content_types)
+        filter_clause = "WHERE c.content_type = ANY(%s)"
+        params.append(types_list)
+
+    params.append(limit)
+
+    query_sql = f"""
+        WITH query_vec AS (
+            SELECT %s::vector AS vec
+        )
+        SELECT
+            c.chunk_index,
+            c.page_number,
+            c.content_type,
+            LEFT(c.content, 200) AS snippet,
+            1 - (c.embedding <=> query_vec.vec) AS cosine_similarity
+        FROM chunks AS c, query_vec
+        {filter_clause}
+        ORDER BY c.embedding <=> query_vec.vec
+        LIMIT %s;
+    """
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query_sql, params)
+            rows = cur.fetchall()
+
+    results: List[ChunkResult] = []
+    for row in rows:
+        results.append(
+            ChunkResult(
+                chunk_index=row["chunk_index"],
+                page_number=row["page_number"],
+                content_type=row["content_type"],
+                snippet=_clean_snippet(row["snippet"]),
+                cosine_similarity=row["cosine_similarity"],
+            )
+        )
+
+    return results
