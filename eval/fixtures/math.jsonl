@@ -1,0 +1,1 @@
+{"id": "scaled-attention", "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a", "latex_gold": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V", "notes": "Scaled dot-product attention from Section 3.2."}

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -62,22 +63,40 @@ class DocumentProcessor:
         
         s3_key: Optional[str] = None
 
+        total_start = time.perf_counter()
         try:
             # 1. Parse PDF
             logger.info("Step 1/3: Parsing PDF...")
+            parse_start = time.perf_counter()
             udr = parse_pdf(pdf_path)
+            parse_elapsed = time.perf_counter() - parse_start
+            num_pages = getattr(udr.metadata, "num_pages", None)
+            if num_pages:
+                pages_per_second = num_pages / parse_elapsed if parse_elapsed else 0.0
+                logger.info(
+                    "Parsed %s page(s) in %.2fs (%.2f pages/s)",
+                    num_pages,
+                    parse_elapsed,
+                    pages_per_second,
+                )
+            else:
+                logger.info("Parsed PDF in %.2fs", parse_elapsed)
             
             # 2. Upload to S3
             logger.info("Step 2/3: Uploading to S3...")
             s3_key = f"pdfs/{doc_id}/{pdf_path.name}"
+            upload_start = time.perf_counter()
             self.s3_client.upload_file(
                 file_path=pdf_path,
                 object_name=s3_key
             )
             logger.debug(f"Uploaded to S3: {s3_key}")
+            upload_elapsed = time.perf_counter() - upload_start
+            logger.info("Uploaded PDF to object storage in %.2fs", upload_elapsed)
             
             # 3. Store in database
             logger.info("Step 3/3: Storing in database...")
+            db_start = time.perf_counter()
             self._insert_document(
                 doc_id=doc_id,
                 pdf_hash=pdf_hash,
@@ -86,14 +105,46 @@ class DocumentProcessor:
                 udr=udr,
                 source_name=source_name
             )
+            db_elapsed = time.perf_counter() - db_start
+            logger.info("Inserted document metadata in %.2fs", db_elapsed)
             
             # 4. Generate retrieval chunks + embeddings
             logger.info("Step 4/4: Generating retrieval chunks and embeddings...")
-            final_status = self._create_chunks_and_embeddings(doc_id, udr)
+            chunks_start = time.perf_counter()
+            final_status, chunk_stats = self._create_chunks_and_embeddings(doc_id, udr)
+            chunks_elapsed = time.perf_counter() - chunks_start
+            if chunk_stats:
+                logger.info(
+                    "Chunk pipeline: %s chunk(s) built in %.2fs; embeddings %.2fs; DB insert %.2fs",
+                    chunk_stats.get("count", 0),
+                    chunk_stats.get("build_elapsed", 0.0),
+                    chunk_stats.get("embed_elapsed", 0.0),
+                    chunk_stats.get("insert_elapsed", 0.0),
+                )
+            else:
+                logger.info("Chunk pipeline completed in %.2fs", chunks_elapsed)
             if final_status:
                 self._update_document_status(doc_id, final_status)
 
-            logger.info(f"✓ Successfully processed: {pdf_path.name} → {doc_id}")
+            total_elapsed = time.perf_counter() - total_start
+            pages = num_pages
+            if not pages and chunk_stats:
+                pages = chunk_stats.get("pages")
+            if pages:
+                per_page = total_elapsed / pages
+                logger.info(
+                    "✓ Successfully processed %s in %.2fs (%.2fs/page)",
+                    pdf_path.name,
+                    total_elapsed,
+                    per_page,
+                )
+            else:
+                logger.info(
+                    "✓ Successfully processed %s in %.2fs",
+                    pdf_path.name,
+                    total_elapsed,
+                )
+            logger.debug("Processed document id: %s", doc_id)
             
             return doc_id
         
@@ -188,22 +239,32 @@ class DocumentProcessor:
         self,
         doc_id: str,
         udr: UnifiedDocumentRepresentation,
-    ) -> Optional[str]:
-        """Build retrieval chunks, generate embeddings, and persist them."""
+    ) -> tuple[Optional[str], Optional[dict[str, float | int]]]:
+        """Build retrieval chunks, generate embeddings, and persist them with timing stats."""
+        chunk_stats: dict[str, float | int] = {}
         try:
+            build_start = time.perf_counter()
             chunks = build_chunks(udr)
+            chunk_stats["build_elapsed"] = time.perf_counter() - build_start
+            chunk_stats["count"] = len(chunks)
+            chunk_stats["pages"] = getattr(udr.metadata, "num_pages", 0)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Failed to build chunks for %s: %s", doc_id, exc, exc_info=True)
-            return None
+            return None, None
 
         if not chunks:
             logger.warning("No retrieval chunks generated for document %s", doc_id)
-            return "ingested"
+            return "ingested", chunk_stats
 
+        embed_start = time.perf_counter()
         embeddings_ready = self._generate_embeddings(chunks)
-        self._insert_chunks(doc_id, chunks)
+        chunk_stats["embed_elapsed"] = time.perf_counter() - embed_start
 
-        return "indexed" if embeddings_ready else "chunked"
+        insert_start = time.perf_counter()
+        self._insert_chunks(doc_id, chunks)
+        chunk_stats["insert_elapsed"] = time.perf_counter() - insert_start
+
+        return ("indexed" if embeddings_ready else "chunked"), chunk_stats
 
     def _generate_embeddings(self, chunks: list[ChunkPayload]) -> bool:
         """Populate in-memory chunk payloads with embeddings."""

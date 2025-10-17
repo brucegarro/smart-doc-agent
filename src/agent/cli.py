@@ -330,6 +330,7 @@ def search(
     table.add_column("Score", justify="right", width=7)
     table.add_column("Page", justify="right", width=6)
     table.add_column("Type", width=8)
+    table.add_column("Doc", width=10)
     table.add_column("Chunk", justify="right", width=6)
     table.add_column("Snippet", overflow="fold")
 
@@ -339,6 +340,7 @@ def search(
             f"{item.cosine_similarity:.3f}",
             str(item.page_number),
             item.content_type,
+            item.document_id[:8] + "...",
             str(item.chunk_index),
             item.snippet or "-",
         )

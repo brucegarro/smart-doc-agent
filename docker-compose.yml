@@ -123,7 +123,7 @@ services:
       - "${APP_PORT:-8080}:8080"  # API endpoint (future)
     stdin_open: true
     tty: true
-    command: ["python", "-m", "agent.cli"]
+    command: ["tail", "-f", "/dev/null"]
 
   worker:
     build:
@@ -212,6 +212,61 @@ services:
       - ./src:/home/jovyan/src:ro              # read-only access to source
       - data:/data
     command: ["start-notebook.sh", "--NotebookApp.token=${JUPYTER_TOKEN:-}"]
+
+  evaluator:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    profiles:
+      - eval
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      app:
+        condition: service_started
+      worker:
+        condition: service_started
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-doc}
+      DB_PASSWORD: ${DB_PASSWORD:-doc}
+      DB_NAME: ${DB_NAME:-docdb}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minio123}
+      S3_BUCKET: ${S3_BUCKET:-doc-bucket}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_QUEUE_INGEST: ${REDIS_QUEUE_INGEST:-q:ingest}
+      REDIS_QUEUE_INDEX: ${REDIS_QUEUE_INDEX:-q:index}
+      OLLAMA_BASE: ${OLLAMA_BASE:-http://ollama:11434}
+      TEXT_LLM_MODEL: ${TEXT_LLM_MODEL:-qwen2.5:7b-instruct-q4_K_M}
+      VLM_MODEL: ${VLM_MODEL:-qwen2-vl:7b-instruct-q4_K_M}
+      EMBEDDER_PROVIDER: ${EMBEDDER_PROVIDER:-local}
+      EMBEDDER_MODEL: ${EMBEDDER_MODEL:-BAAI/bge-small-en-v1.5}
+      EMBEDDER_DEVICE: ${EMBEDDER_DEVICE:-mps}
+      EMBEDDER_NORMALIZE: ${EMBEDDER_NORMALIZE:-True}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EVAL_FIXTURES_DIR: /eval/fixtures
+      EVAL_RESULTS_DIR: /eval/results
+      EVAL_LOG_LEVEL: ${EVAL_LOG_LEVEL:-INFO}
+      EVAL_APP_HEALTHCHECK_URL: ""
+    volumes:
+      - ./eval/fixtures:/eval/fixtures:ro
+      - ./eval/results:/eval/results
+      - data:/data
+      - models:/root/.cache/huggingface
+      - models:/root/.paddleocr
+      - pix2tex-cache:/usr/local/lib/python3.11/site-packages/pix2tex/model/checkpoints
+    command: ["python", "-m", "agent.evaluator.harness"]
 
 volumes:
   pgdata:

@@ -16,6 +16,8 @@ _whitespace_re = re.compile(r"\s+")
 class ChunkResult:
     """Represents a chunk returned from similarity search."""
 
+    chunk_id: str
+    document_id: str
     chunk_index: int
     page_number: int
     content_type: str
@@ -72,6 +74,8 @@ def search_chunks(
             SELECT %s::vector AS vec
         )
         SELECT
+            c.id AS chunk_id,
+            c.document_id,
             c.chunk_index,
             c.page_number,
             c.content_type,
@@ -92,6 +96,8 @@ def search_chunks(
     for row in rows:
         results.append(
             ChunkResult(
+                chunk_id=str(row["chunk_id"]),
+                document_id=str(row["document_id"]),
                 chunk_index=row["chunk_index"],
                 page_number=row["page_number"],
                 content_type=row["content_type"],
