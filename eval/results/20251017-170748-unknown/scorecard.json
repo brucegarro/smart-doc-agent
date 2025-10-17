@@ -1,0 +1,495 @@
+{
+  "env": {
+    "embedder_model": "BAAI/bge-small-en-v1.5",
+    "git_sha": "unknown",
+    "ingest_time_per_page_budget_sec": 5.0,
+    "retrieval_k": 5,
+    "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+    "vlm_model": "qwen2-vl:7b-instruct-q4_K_M"
+  },
+  "gates": {
+    "all": false,
+    "boot": true,
+    "extraction": true,
+    "ingestion": true,
+    "math": true,
+    "perf": true,
+    "queries": false
+  },
+  "metrics": {
+    "overall_score": 0.6666666666666666,
+    "runtime_seconds": 17.35614013671875
+  },
+  "run_id": "20251017-170748-unknown",
+  "scenarios": {
+    "boot": {
+      "artifacts": {
+        "checks": [
+          {
+            "detail": "postgres ready",
+            "latency_seconds": 0.003632708001532592,
+            "name": "postgres",
+            "status": "passed"
+          },
+          {
+            "detail": "minio ready (200)",
+            "latency_seconds": 0.011848416994325817,
+            "name": "minio",
+            "status": "passed"
+          },
+          {
+            "detail": "ollama ready (200)",
+            "latency_seconds": 0.011513375000504311,
+            "name": "ollama",
+            "status": "passed"
+          },
+          {
+            "detail": "redis ready",
+            "latency_seconds": 0.0005652920008287765,
+            "name": "redis",
+            "status": "passed"
+          },
+          {
+            "detail": "app healthcheck disabled",
+            "latency_seconds": 4.832996637560427e-06,
+            "name": "app",
+            "status": "warn"
+          },
+          {
+            "detail": "worker assumed ready",
+            "latency_seconds": 0.0004461659991648048,
+            "name": "worker",
+            "status": "passed"
+          }
+        ]
+      },
+      "details": [
+        "postgres:passed",
+        "minio:passed",
+        "ollama:passed",
+        "redis:passed",
+        "app:warn",
+        "worker:passed"
+      ],
+      "duration_seconds": 0.028208708004967775,
+      "metrics": {
+        "services_checked": 6,
+        "services_failed": 0,
+        "services_passed": 5,
+        "services_warn": 1
+      },
+      "status": "warn"
+    },
+    "db_setup": {
+      "artifacts": {},
+      "details": [
+        "created:docdb_eval_20251017_170748_unknown"
+      ],
+      "duration_seconds": 0.0600404159995378,
+      "metrics": {
+        "database": "docdb_eval_20251017_170748_unknown"
+      },
+      "status": "passed"
+    },
+    "extraction": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "fields": {
+              "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over existing best results, including ensembles, by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.",
+              "authors": [
+                "Ashish Vaswani",
+                "Noam Shazeer",
+                "Niki Parmar",
+                "Jakob Uszkoreit",
+                "Llion Jones",
+                "Aidan N. Gomez",
+                "Lukasz Kaiser",
+                "Illia Polosukhin"
+              ],
+              "title": "Attention Is All You Need"
+            }
+          },
+          {
+            "document_id": "doc_batch_normalization",
+            "fields": {
+              "abstract": "Training deep neural networks is complicated by the fact that the distribution of each layer's inputs changes during training, as the parameters of the previous layers change. This slows down the training by requiring lower learning rates and careful parameter initialization, and makes it notoriously hard to train models with saturating nonlinearities. We refer to this phenomenon as internal covariate shift, and address the problem by normalizing layer inputs. Our method draws its strength from making normalization a part of the model architecture and performing the normalization for each training mini-batch. Batch Normalization allows us to use much higher learning rates and be less careful about initialization. It also acts as a regularizer, in some cases eliminating the need for Dropout. Applied to a state-of-the-art image classification model, Batch Normalization achieves the same accuracy with 14 times fewer training steps, and beats the original model by a significant margin.",
+              "authors": [
+                "Sergey Ioffe",
+                "Christian Szegedy"
+              ],
+              "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"
+            }
+          },
+          {
+            "document_id": "doc_deep_residual_learning",
+            "fields": {
+              "abstract": "Deeper neural networks are more difficult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those used previously. We explicitly reformulate the layers as learning residual functions with reference to the layer inputs, instead of learning unreferenced functions. We provide comprehensive empirical evidence showing that these residual networks are easier to optimize, and can gain accuracy from considerably increased depth. On the ImageNet dataset we evaluate residual nets with a depth of up to 152 layers, 8x deeper than VGG nets but still having lower complexity. An ensemble of these residual nets achieves 3.57% error on the ImageNet test set. This result won the 1st place on the ILSVRC 2015 classification task. We also present analysis on CIFAR-10 with 100 and 1000 layers.",
+              "authors": [
+                "Kaiming He",
+                "Xiangyu Zhang",
+                "Shaoqing Ren",
+                "Jian Sun"
+              ],
+              "title": "Deep Residual Learning for Image Recognition"
+            }
+          }
+        ]
+      },
+      "details": [
+        "extraction scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 5
+      },
+      "status": "warn"
+    },
+    "ingestion": {
+      "artifacts": {
+        "documents": [
+          "166e603c-165e-4474-8ab4-279a2d575d0e",
+          "713d70ba-6023-4404-ba2f-da57032a30ef",
+          "859dbe6c-e5a8-4212-a658-3c15a5c4861f",
+          "2e5a0f4d-2c63-45f1-ad69-2328c8a1b0a8",
+          "bcc90d62-1328-4a2e-ae3b-d9e38d20ed38"
+        ]
+      },
+      "details": [
+        "ingested:166e603c-165e-4474-8ab4-279a2d575d0e",
+        "ingested:713d70ba-6023-4404-ba2f-da57032a30ef",
+        "ingested:859dbe6c-e5a8-4212-a658-3c15a5c4861f",
+        "ingested:2e5a0f4d-2c63-45f1-ad69-2328c8a1b0a8",
+        "ingested:bcc90d62-1328-4a2e-ae3b-d9e38d20ed38"
+      ],
+      "duration_seconds": 17.084481842008245,
+      "metrics": {
+        "avg_time_per_doc_sec": 3.416896368401649,
+        "document_ids": [
+          "166e603c-165e-4474-8ab4-279a2d575d0e",
+          "713d70ba-6023-4404-ba2f-da57032a30ef",
+          "859dbe6c-e5a8-4212-a658-3c15a5c4861f",
+          "2e5a0f4d-2c63-45f1-ad69-2328c8a1b0a8",
+          "bcc90d62-1328-4a2e-ae3b-d9e38d20ed38"
+        ],
+        "documents_attempted": 5,
+        "documents_failed": 0,
+        "documents_ingested": 5,
+        "durations_sec": [
+          6.464126462000422,
+          2.5369888759960304,
+          2.87845191800443,
+          2.7628414600039832,
+          2.442073126003379
+        ],
+        "ingest_time_per_page_sec": 0.2372844700278923,
+        "total_pages": 72,
+        "total_time_sec": 17.084481842008245
+      },
+      "status": "passed"
+    },
+    "math": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "id": "scaled-attention",
+            "latex_gold": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V",
+            "notes": "Scaled dot-product attention from Section 3.2."
+          }
+        ]
+      },
+      "details": [
+        "math scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "perf": {
+      "artifacts": {},
+      "details": [],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "ingestion_avg_time_sec": 3.416896368401649,
+        "ingestion_total_time_sec": 17.084481842008245,
+        "query_p50_ms": 17.69662500009872,
+        "query_p95_ms": 31.501003498124184
+      },
+      "status": "passed"
+    },
+    "queries": {
+      "artifacts": {
+        "queries": [
+          {
+            "gold_passages": [
+              "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."
+            ],
+            "hit_at_k": 0.0,
+            "id": "attn-arch",
+            "latency_ms": 34.355165997112636,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.841595328219542,
+            "query": "What architecture does the paper introduce?",
+            "retrieved_fingerprints": [
+              "cf7fcb7735b6c9f9db83de0a",
+              "ce49822ce8f3769d9c39f86c",
+              "00efde1e8580c8760efabe3f",
+              "fb31e1979c255fe5ee5a47ee",
+              "8f40df20b3701e31b48ea677"
+            ],
+            "retrieved_snippets": [
+              "Appendix Variant of the Inception Model Used Figure 5 documents the changes that were performed compared to the architecture with respect to the GoogleNet archictecture. For the interpretation of t...",
+              "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Ne...",
+              "Table 2 summarizes our results and compares our translation quality and training costs to other model architectures from the literature. We estimate the number of floating point operations used to...",
+              "details are given in the Appendix. We refer to this model as Inception in the rest of the text. The model was trained using a version of Stochastic Gradient Descent with mo- mentum (Sutskever et al...",
+              "\uf8f0 1 \u00d7 1, 512 3 \u00d7 3, 512 1 \u00d7 1, 2048 \uf8f9 \uf8fb \u00d7 3 \uf8ee \uf8f0 1 \u00d7 1, 512 3 \u00d7 3, 512 1 \u00d7 1, 2048 \uf8f9 \uf8fb \u00d7 3 1 \u00d7 1 average pool, 1000-d fc, softmax FLOPs 1.8 \u00d7 10 9 3.6 \u00d7 10 9 3.8 \u00d7 10 9 7.6 \u00d7 10 9 11.3 \u00d7 10 9 Table..."
+            ],
+            "similarity_scores": [
+              0.0783289817232376,
+              0.2230971128608924,
+              0.11323328785811733,
+              0.17324350336862368,
+              0.11856474258970359
+            ],
+            "top_similarity": 0.2230971128608924
+          },
+          {
+            "gold_passages": [
+              "The encoder is composed of a stack of N=6 identical layers."
+            ],
+            "hit_at_k": 0.0,
+            "id": "encoder-depth",
+            "latency_ms": 17.69662500009872,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9733592243920325,
+            "query": "How many layers are stacked in the Transformer encoder?",
+            "retrieved_fingerprints": [
+              "6c630f3becee38dac0f71091",
+              "9af87fedfbe95f9ae2aa9815",
+              "255955d5378530019c98a85d",
+              "480444d9cafb3efd1902bf95",
+              "afd565be3348e060b25d411e"
+            ],
+            "retrieved_snippets": [
+              "Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position- wise...",
+              "Table 1: Maximum path lengths, per-layer complexity and minimum number of sequential operations for different layer types. n is the sequence length, d is the representation dimension, k is the kern...",
+              "To the best of our knowledge, however, the Transformer is the first transduction model relying entirely on self-attention to compute representations of its input and output without using sequence-...",
+              "GNMT + RL Ensemble [38] 26.30 41.16 1 . 8 \u00b7 10 20 1 . 1 \u00b7 10 21 ConvS2S Ensemble [9] 26.36 41.29 7 . 7 \u00b7 10 19 1 . 2 \u00b7 10 21 Transformer (base model) 27.3 38.1 3 . 3 \u00b7 10 18 Transformer (big) 28.4...",
+              "In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected feed-forward network, which is applied to each position separately and identically. Thi..."
+            ],
+            "similarity_scores": [
+              0.08416547788873038,
+              0.056162246489859596,
+              0.0685805422647528,
+              0.08353808353808354,
+              0.06546644844517185
+            ],
+            "top_similarity": 0.08416547788873038
+          },
+          {
+            "gold_passages": [
+              "The Transformer uses multi-head attention in three different ways: In \"encoder-decoder attention\" layers, the queries come from the previous decoder layer, and the memory keys and values come from the output of the encoder. This allows every position in the decoder to attend over all positions in the input sequence. This mimics the typical encoder-decoder attention mechanisms in sequence-to-sequence models such as [38, 2, 9]. The encoder contains self-attention layers. In a self-attention layer all of the keys, values and queries come from the same place, in this case, the output of the previous layer in the encoder. Each position in the encoder can attend to all positions in the previous layer of the encoder. Similarly, self-attention layers in the decoder allow each position in the decoder to attend to all positions in the decoder up to and including that position."
+            ],
+            "hit_at_k": 1.0,
+            "id": "multihead-uses",
+            "latency_ms": 17.734291999659035,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9920044342089221,
+            "query": "List the three ways multi-head attention is used in the Transformer.",
+            "retrieved_fingerprints": [
+              "3d1c5a32b5371d3a5acf2f3c",
+              "0f82bd00127044a57296691a",
+              "6904862122caf3b30aecb8be",
+              "02b933cb09a7fcfcdd3eee26",
+              "1d5f9daf8878930cb810dd69"
+            ],
+            "retrieved_snippets": [
+              "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in three different ways: \u2022 In \"encoder-decoder attention\" layers, the queries come from the previous decoder l...",
+              "4 To illustrate why the dot products get large, assume that the components of q and k are independent random variables with mean 0 and variance 1 . Then their dot product, q \u00b7 k = \ufffd d k i =1 q i k...",
+              "An attention function can be described as mapping a query and a set of key-value pairs to an output, where the query, keys, values, and output are all vectors. The output is computed as a weighted...",
+              "The two most commonly used attention functions are additive attention [ 2 ], and dot-product (multi- plicative) attention. Dot-product attention is identical to our algorithm, except for the scalin...",
+              "\u2217 Equal contribution. Listing order is random. Jakob proposed replacing RNNs with self-attention and started the effort to evaluate this idea. Ashish, with Illia, designed and implemented the first..."
+            ],
+            "similarity_scores": [
+              0.823805060918463,
+              0.004113110539845758,
+              0.004952947003467063,
+              0.01680672268907563,
+              0.028723840787853918
+            ],
+            "top_similarity": 0.823805060918463
+          },
+          {
+            "gold_passages": [
+              "We refer to the change in the distributions of internal nodes of a deep network, in the course of training, as internal covariate shift. Eliminating it offers a promise of faster training. We propose a new mechanism, which we call Batch Normalization, that takes a step towards reducing internal covariate shift, and in doing so dramatically accelerates the training of deep neural nets."
+            ],
+            "hit_at_k": 0.0,
+            "id": "bn-internal-shift",
+            "latency_ms": 15.619124998920597,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.8548964950926174,
+            "query": "What phenomenon does batch normalization seek to reduce?",
+            "retrieved_fingerprints": [
+              "e32d9f1889d59cccc310a9e1",
+              "c8701b5555022cdab0e26871",
+              "556f31e7ce15c896bbc362eb",
+              "285fa316f748391498365197",
+              "d9bef12f6eac5511d5b4f87a"
+            ],
+            "retrieved_snippets": [
+              "In traditional deep networks, too-high learning rate may result in the gradients that explode or vanish, as well as getting stuck in poor local minima. Batch Normaliza- tion helps address these iss...",
+              "When training with Batch Normalization, a training ex- ample is seen in conjunction with other examples in the mini-batch, and the training network no longer produc- ing deterministic values for a...",
+              "entiating characteristics of Batch Normalization include the learned scale and shift that allow the BN transform to represent identity (the standardization layer did not re- quire this since it was...",
+              "Interestingly, our method bears similarity to the stan- dardization layer of (G\u00a8ulc\u00b8ehre & Bengio, 2013), though the two methods stem from very different goals, and per- form different tasks. The g...",
+              "Simply adding Batch Normalization to a network does not take full advantage of our method. To do so, we further changed the network and its training parameters, as fol- lows: Increase learning rate..."
+            ],
+            "similarity_scores": [
+              0.02463768115942029,
+              0.05668934240362812,
+              0.014874141876430207,
+              0.033783783783783786,
+              0.005378753922008068
+            ],
+            "top_similarity": 0.05668934240362812
+          },
+          {
+            "gold_passages": [
+              "On the Image Net dataset we evaluate residual nets with a depth of up to 152 layers-8x deeper than VGG nets but still having lower complexity. An ensemble of these residual nets achieves 3.57% error on the Image Net testset. This result won the 1st place on the ILSVRC 2015 classification task."
+            ],
+            "hit_at_k": 0.0,
+            "id": "resnet-imagenet-error",
+            "latency_ms": 16.803416998300236,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.8976688377342252,
+            "query": "What ImageNet test error does the residual net ensemble achieve?",
+            "retrieved_fingerprints": [
+              "aeaf0263a90b8eee5128031f",
+              "52614438d42c666ae0c541ab",
+              "8f40df20b3701e31b48ea677",
+              "85db5c0e15a18e8cfb7c7840",
+              "0ac07e22c6f489ceb8afad87"
+            ],
+            "retrieved_snippets": [
+              "The current reported best results on the ImageNet Large Scale Visual Recognition Competition are reached by the Deep Image ensemble of traditional models (Wu et al., 2015) and the ensemble model of...",
+              "We evaluate our method on the ImageNet 2012 classi\ufb01- cation dataset [36] that consists of 1000 classes. The models are trained on the 1.28 million training images, and evalu- ated on the 50k valida...",
+              "\uf8f0 1 \u00d7 1, 512 3 \u00d7 3, 512 1 \u00d7 1, 2048 \uf8f9 \uf8fb \u00d7 3 \uf8ee \uf8f0 1 \u00d7 1, 512 3 \u00d7 3, 512 1 \u00d7 1, 2048 \uf8f9 \uf8fb \u00d7 3 1 \u00d7 1 average pool, 1000-d fc, softmax FLOPs 1.8 \u00d7 10 9 3.6 \u00d7 10 9 3.8 \u00d7 10 9 7.6 \u00d7 10 9 11.3 \u00d7 10 9 Table...",
+              "ResNet reduces the top-1 error by 3.5% (Table 2), resulting from the successfully reduced training error (Fig. 4 right vs . left). This comparison veri\ufb01es the effectiveness of residual learning on...",
+              "5 Conclusion We have presented a novel mechanism for dramatically accelerating the training of deep networks. It is based on the premise that covariate shift, which is known to com- plicate the tra..."
+            ],
+            "similarity_scores": [
+              0.020744356314826115,
+              0.00844475721323012,
+              0.015471167369901548,
+              0.006519967400162999,
+              0.024263431542461005
+            ],
+            "top_similarity": 0.024263431542461005
+          },
+          {
+            "gold_passages": [
+              "We introduce a new language representation model called BERT, which stands for Bidirectional Encoder Representations from Transformers."
+            ],
+            "hit_at_k": 0.0,
+            "id": "bert-acronym",
+            "latency_ms": 16.41183399624424,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9237714913954154,
+            "query": "What does the acronym BERT stand for?",
+            "retrieved_fingerprints": [
+              "ea4eeb026311a034a7460325",
+              "6a4787b852d330ddbb895246",
+              "a89a53733b952f91f8c5f6c1",
+              "498fa5af60214de1e5f7f34b",
+              "8a27c6ee2ad1b3fc60ad30e2"
+            ],
+            "retrieved_snippets": [
+              "We present additional ablation studies for BERT including: \u2013 Effect of Number of Training Steps; and \u2013 Ablation for Different Masking Proce- dures. A Additional Details for BERT A.1 Illustration of...",
+              "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding Jacob Devlin Ming-Wei Chang Kenton Lee Kristina Toutanova Google AI Language { jacobdevlin,mingweichang,kentonl,kris...",
+              "System Dev Test EM F1 EM F1 Top Leaderboard Systems (Dec 10th, 2018) Human - - 82.3 91.2 #1 Ensemble - nlnet - - 86.0 91.7 #2 Ensemble - QANet - - 84.5 90.5 Published BiDAF+ELMo (Single) - 85.6 - 8...",
+              "Results are presented in Table 7 . BERT LARGE performs competitively with state-of-the-art meth- ods. The best performing method concatenates the token representations from the top four hidden lay-...",
+              "The SQuAD 2.0 task extends the SQuAD 1.1 problem de\ufb01nition by allowing for the possibility that no short answer exists in the provided para- graph, making the problem more realistic. We use a simpl..."
+            ],
+            "similarity_scores": [
+              0.11273080660835763,
+              0.17735334242837653,
+              0.09531772575250837,
+              0.0817717206132879,
+              0.12479474548440066
+            ],
+            "top_similarity": 0.17735334242837653
+          },
+          {
+            "gold_passages": [
+              "Specifically, our proposed model, DeepLabv3+, extends DeepLabv3 by adding a simple yet effective decoder module to refine the segmentation results especially along object boundaries."
+            ],
+            "hit_at_k": 0.0,
+            "id": "deeplab-decoder",
+            "latency_ms": 24.84129100048449,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.7728745428578037,
+            "query": "What module does DeepLabv3+ add to improve segmentation boundaries?",
+            "retrieved_fingerprints": [
+              "407bc8c9e1d4ff0015e55137",
+              "d0da5ca088c91449cd798714",
+              "cfa12000962cb459f43403fb",
+              "62b4abfa0e8afedf8969d0ee",
+              "4db7c7365b699b8d19df6221"
+            ],
+            "retrieved_snippets": [
+              "4.4 Improvement along Object Boundaries In this subsection, we evaluate the segmentation accuracy with the trimap exper- iment [ 14 , 40 , 39 ] to quantify the accuracy of the proposed decoder modu...",
+              "DeepLabv3+: Encoder-Decoder with Atrous Separable Convolution 3 semantic segmentation, and applying the atrous separable convolution to both the ASPP and decoder modules. Finally, we demonstrate th...",
+              "We de\ufb01ne \u201cDeepLabv3 feature map\u201d as the last feature map computed by DeepLabv3 ( i.e ., the features containing ASPP features and image-level fea- tures), and [ k \u00d7 k, f ] as a convolution operatio...",
+              "4 L.-C Chen, Y. Zhu, G. Papandreou, F. Schro\ufb00, and H. Adam 1x1 Conv 3x3 Conv rate 6 3x3 Conv rate 12 3x3 Conv rate 18 Image Pooling 1x1 Conv 1x1 Conv Low-Level Features Upsample by 4 Concat 3x3 Con...",
+              "In this section, we experiment DeepLabv3+ on the Cityscapes dataset [ 3 ], a large-scale dataset containing high quality pixel-level annotations of 5000 images (2975, 500, and 1525 for the training..."
+            ],
+            "similarity_scores": [
+              0.049019607843137254,
+              0.18266048974189278,
+              0.08666442727578098,
+              0.21940298507462686,
+              0.1335379892555641
+            ],
+            "top_similarity": 0.21940298507462686
+          }
+        ]
+      },
+      "details": [
+        "hit@5 below threshold 0.143< 0.7",
+        "avg top similarity 0.230< 0.82"
+      ],
+      "duration_seconds": 0.14346174999081995,
+      "metrics": {
+        "hit_at_k_avg": 0.14285714285714285,
+        "latency_ms_all": [
+          34.355165997112636,
+          17.69662500009872,
+          17.734291999659035,
+          15.619124998920597,
+          16.803416998300236,
+          16.41183399624424,
+          24.84129100048449
+        ],
+        "latency_p50_ms": 17.69662500009872,
+        "latency_p95_ms": 31.501003498124184,
+        "ndcg_at_k_avg": 0.8937386219857941,
+        "queries_run": 7,
+        "top_similarity_all": [
+          0.2230971128608924,
+          0.08416547788873038,
+          0.823805060918463,
+          0.05668934240362812,
+          0.024263431542461005,
+          0.17735334242837653,
+          0.21940298507462686
+        ],
+        "top_similarity_avg": 0.22982525044531116
+      },
+      "status": "failed"
+    }
+  },
+  "timestamp": "2025-10-17T17:08:05.670275+00:00"
+}

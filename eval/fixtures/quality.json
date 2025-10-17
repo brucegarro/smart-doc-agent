@@ -1,0 +1,10 @@
+{
+  "paths": [
+    "src",
+    "agent"
+  ],
+  "ignore": [],
+  "max_function_ccn": 12.0,
+  "max_average_ccn": 6.0,
+  "min_maintainability_index": 60.0
+}

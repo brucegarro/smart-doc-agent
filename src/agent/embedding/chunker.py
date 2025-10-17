@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Chunking heuristics
 _MAX_TOKENS_PER_CHUNK = 240
+_TOKEN_OVERLAP = 40
 _MIN_CHARS_PER_CHUNK = 30
 _TABLE_PREVIEW_ROWS = 6
 
@@ -52,14 +53,55 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
     buffer_sections: List[Optional[str]] = []
     buffer_tokens = 0
 
-    def flush_buffer(force: bool = False) -> None:
+    def _capture_overlap(
+        current_text: List[str],
+        current_blocks: List[Dict[str, Any]],
+        current_pages: List[int],
+        current_sections: List[Optional[str]],
+        tokens_per_block: List[int],
+    ) -> Dict[str, Any]:
+        overlap_text: List[str] = []
+        overlap_blocks: List[Dict[str, Any]] = []
+        overlap_pages: List[int] = []
+        overlap_sections: List[Optional[str]] = []
+        overlap_tokens = 0
+
+        for text, block, page, section, token_count in zip(
+            reversed(current_text),
+            reversed(current_blocks),
+            reversed(current_pages),
+            reversed(current_sections),
+            reversed(tokens_per_block),
+        ):
+            overlap_text.insert(0, text)
+            overlap_blocks.insert(0, block)
+            overlap_pages.insert(0, page)
+            overlap_sections.insert(0, section)
+            overlap_tokens += token_count
+            if overlap_tokens >= _TOKEN_OVERLAP:
+                break
+
+        return {
+            "text": overlap_text,
+            "blocks": overlap_blocks,
+            "pages": overlap_pages,
+            "sections": overlap_sections,
+            "tokens": overlap_tokens,
+        }
+
+    def flush_buffer(force: bool = False, keep_overlap: bool = False) -> None:
         nonlocal chunk_index, buffer_text, buffer_blocks, buffer_pages
         nonlocal buffer_sections, buffer_tokens
 
         if not buffer_text:
             return
 
-        content = "\n\n".join(part for part in buffer_text if part).strip()
+        current_text = buffer_text.copy()
+        current_blocks = buffer_blocks.copy()
+        current_pages = buffer_pages.copy()
+        current_sections = buffer_sections.copy()
+
+        content = "\n\n".join(part for part in current_text if part).strip()
         if not content:
             buffer_text.clear()
             buffer_blocks.clear()
@@ -68,18 +110,36 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
             buffer_tokens = 0
             return
 
-        if not force and len(content) < _MIN_CHARS_PER_CHUNK and len(buffer_blocks) > 1:
+        if (
+            not force
+            and len(content) < _MIN_CHARS_PER_CHUNK
+            and len(current_blocks) > 1
+        ):
             # Try to keep small fragments attached to future blocks
             return
 
-        chunk_section = next((title for title in buffer_sections if title), None)
-        page_number = min(buffer_pages) if buffer_pages else None
+        chunk_section = next((title for title in current_sections if title), None)
+        page_number = min(current_pages) if current_pages else None
         token_count = _estimate_token_count(content)
 
         chunk_metadata: Dict[str, Any] = {
             "source": "text_blocks",
-            "blocks": buffer_blocks.copy(),
+            "blocks": current_blocks,
         }
+
+        overlap_data: Optional[Dict[str, Any]] = None
+        if keep_overlap and _TOKEN_OVERLAP > 0:
+            tokens_per_block = [
+                _estimate_token_count(text)
+                for text in current_text
+            ]
+            overlap_data = _capture_overlap(
+                current_text,
+                current_blocks,
+                current_pages,
+                current_sections,
+                tokens_per_block,
+            )
 
         chunks.append(
             ChunkPayload(
@@ -101,6 +161,13 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
         buffer_sections.clear()
         buffer_tokens = 0
 
+        if overlap_data and overlap_data["text"]:
+            buffer_text.extend(overlap_data["text"])
+            buffer_blocks.extend(overlap_data["blocks"])
+            buffer_pages.extend(overlap_data["pages"])
+            buffer_sections.extend(overlap_data["sections"])
+            buffer_tokens = overlap_data["tokens"]
+
     for page in udr.pages:
         for block in page.blocks:
             block_text = (block.text or "").strip()
@@ -114,20 +181,34 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
                 "reading_order": block.reading_order,
             }
 
+            block_section = block_section_map.get(block.block_id)
+            section_changed = (
+                buffer_sections
+                and block_section
+                and any(section for section in buffer_sections if section)
+                and block_section != next(
+                    (section for section in reversed(buffer_sections) if section),
+                    None,
+                )
+            )
+
             if block.block_type == "heading":
-                flush_buffer()
+                flush_buffer(keep_overlap=False)
+
+            if section_changed:
+                flush_buffer(keep_overlap=False)
 
             block_tokens = _estimate_token_count(block_text)
             if buffer_tokens and buffer_tokens + block_tokens > _MAX_TOKENS_PER_CHUNK:
-                flush_buffer()
+                flush_buffer(keep_overlap=True)
 
             buffer_text.append(block_text)
             buffer_blocks.append(block_info)
             buffer_pages.append(page.page_num)
-            buffer_sections.append(block_section_map.get(block.block_id))
+            buffer_sections.append(block_section)
             buffer_tokens += block_tokens
 
-    flush_buffer(force=True)
+    flush_buffer(force=True, keep_overlap=False)
 
     # Tables
     for table in udr.tables:

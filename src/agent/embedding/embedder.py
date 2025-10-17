@@ -85,7 +85,8 @@ class EmbeddingClient:
         if not all_texts:
             return []
 
-        text_list = [text for text in all_texts if text]
+        # Normalize casing so semantically identical spans embed identically.
+        text_list = [text.lower() for text in all_texts if text]
         if not text_list:
             return []
 

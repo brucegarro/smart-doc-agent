@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import math
@@ -20,6 +21,8 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Json
 from redis import Redis
+from radon.complexity import cc_rank, cc_visit
+from radon.metrics import mi_visit
 
 from agent.config import settings
 from agent.db import get_db_connection, db
@@ -54,9 +57,12 @@ class EvaluatorConfig:
     fixtures_queries: Path
     fixtures_fields: Path
     fixtures_math: Path
+    fixtures_quality: Path
     results_root: Path
     run_id: str
     git_sha: str
+    project_root: Path
+    code_quality_paths: Tuple[Path, ...]
     wait_timeout: float = 600.0
     poll_interval: float = 5.0
     retrieval_k: int = 5
@@ -65,6 +71,9 @@ class EvaluatorConfig:
     retrieval_text_match_threshold: float = 0.82
     query_latency_budget_ms: float = 2000.0
     ingest_time_per_page_budget_sec: float = 5.0
+    complexity_function_threshold: float = 10.0
+    complexity_average_threshold: float = 5.0
+    maintainability_threshold: float = 65.0
 
     @classmethod
     def from_env(cls) -> "EvaluatorConfig":
@@ -78,6 +87,21 @@ class EvaluatorConfig:
             run_id = f"{timestamp}-{sha}"
 
         git_sha = cls._detect_git_sha()
+        default_project_root = cls._detect_project_root()
+        project_root = Path(os.getenv("EVAL_PROJECT_ROOT", str(default_project_root))).resolve()
+
+        quality_path_tokens = os.getenv("EVAL_CODE_QUALITY_PATHS", "src,agent").split(",")
+        code_quality_paths: List[Path] = []
+        for token in quality_path_tokens:
+            raw = token.strip()
+            if not raw:
+                continue
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = project_root / candidate
+            candidate = candidate.resolve()
+            if candidate not in code_quality_paths:
+                code_quality_paths.append(candidate)
 
         retrieval_hit_threshold = float(os.getenv("EVAL_RETRIEVAL_HIT_THRESHOLD", "0.7"))
         retrieval_ndcg_threshold = float(os.getenv("EVAL_RETRIEVAL_NDCG_THRESHOLD", "0.6"))
@@ -86,6 +110,9 @@ class EvaluatorConfig:
         ingest_time_per_page_budget_sec = float(os.getenv("EVAL_INGEST_TIME_PER_PAGE_BUDGET_SEC", "5"))
         wait_timeout = float(os.getenv("EVAL_WAIT_TIMEOUT", "180"))
         poll_interval = float(os.getenv("EVAL_POLL_INTERVAL", "5"))
+        complexity_function_threshold = float(os.getenv("EVAL_COMPLEXITY_FUNCTION_MAX", "10"))
+        complexity_average_threshold = float(os.getenv("EVAL_COMPLEXITY_AVG_MAX", "5"))
+        maintainability_threshold = float(os.getenv("EVAL_MAINTAINABILITY_MIN", "65"))
 
         return cls(
             fixtures_root=fixtures_root,
@@ -93,9 +120,12 @@ class EvaluatorConfig:
             fixtures_queries=fixtures_root / "queries.jsonl",
             fixtures_fields=fixtures_root / "fields.jsonl",
             fixtures_math=fixtures_root / "math.jsonl",
+            fixtures_quality=fixtures_root / "quality.json",
             results_root=results_root,
             run_id=run_id,
             git_sha=git_sha,
+            project_root=project_root,
+            code_quality_paths=tuple(code_quality_paths),
             wait_timeout=wait_timeout,
             poll_interval=poll_interval,
             retrieval_k=int(os.getenv("EVAL_RETRIEVAL_K", "5")),
@@ -104,6 +134,9 @@ class EvaluatorConfig:
             retrieval_text_match_threshold=retrieval_text_match_threshold,
             query_latency_budget_ms=query_latency_budget_ms,
             ingest_time_per_page_budget_sec=ingest_time_per_page_budget_sec,
+            complexity_function_threshold=complexity_function_threshold,
+            complexity_average_threshold=complexity_average_threshold,
+            maintainability_threshold=maintainability_threshold,
         )
 
     @staticmethod
@@ -134,6 +167,21 @@ class EvaluatorConfig:
                 return raw[:12]
         return "unknown"
 
+    @staticmethod
+    def _detect_project_root() -> Path:
+        start = Path(__file__).resolve()
+        markers = ("pyproject.toml", "requirements.txt", "README.md", ".git")
+        for candidate in [start.parent, *start.parents]:
+            try:
+                if any((candidate / marker).exists() for marker in markers):
+                    return candidate
+            except OSError:
+                continue
+        try:
+            return Path.cwd().resolve()
+        except OSError:
+            return start.parent
+
 
 class Evaluator:
     def __init__(self, config: EvaluatorConfig) -> None:
@@ -157,6 +205,12 @@ class Evaluator:
             scenario_results[boot_result.name] = boot_result
             if boot_result.status == "failed":
                 logger.error("Boot checks failed; aborting evaluation")
+                return self._finalize_run(scenario_results, ingestion_doc_ids)
+
+            quality_result = self._run_code_quality_suite()
+            scenario_results[quality_result.name] = quality_result
+            if quality_result.status == "failed":
+                logger.error("Code quality checks failed; aborting evaluation")
                 return self._finalize_run(scenario_results, ingestion_doc_ids)
 
             db_setup_result = self._prepare_test_database()
@@ -367,6 +421,179 @@ class Evaluator:
     # ------------------------------------------------------------------
     # Scenarios
     # ------------------------------------------------------------------
+    def _run_code_quality_suite(self) -> ScenarioResult:
+        start = time.perf_counter()
+        fixture = self._load_quality_fixture()
+
+        path_tokens = fixture.get("paths") if isinstance(fixture, dict) else None
+        ignore_patterns = fixture.get("ignore", []) if isinstance(fixture, dict) else []
+        if not isinstance(ignore_patterns, list):
+            ignore_patterns = []
+        ignore_patterns = [pattern.strip() for pattern in ignore_patterns if isinstance(pattern, str) and pattern.strip()]
+
+        if path_tokens and isinstance(path_tokens, list):
+            candidate_paths = []
+            for token in path_tokens:
+                if not isinstance(token, str):
+                    continue
+                raw = token.strip()
+                if not raw:
+                    continue
+                candidate = Path(raw)
+                if not candidate.is_absolute():
+                    candidate = self.config.project_root / candidate
+                candidate = candidate.resolve()
+                if candidate not in candidate_paths:
+                    candidate_paths.append(candidate)
+        else:
+            candidate_paths = list(self.config.code_quality_paths)
+
+        if isinstance(fixture, dict):
+            function_threshold = self._safe_float(fixture.get("max_function_ccn"), self.config.complexity_function_threshold)
+            average_threshold = self._safe_float(fixture.get("max_average_ccn"), self.config.complexity_average_threshold)
+            maintainability_threshold = self._safe_float(
+                fixture.get("min_maintainability_index"),
+                self.config.maintainability_threshold,
+            )
+        else:
+            function_threshold = self.config.complexity_function_threshold
+            average_threshold = self.config.complexity_average_threshold
+            maintainability_threshold = self.config.maintainability_threshold
+
+        seen_files: set[Path] = set()
+        analyzed_files: List[Path] = []
+        complexities: List[Tuple[float, Path, str, int]] = []
+        maintainabilities: List[Tuple[float, Path]] = []
+        read_errors: List[str] = []
+        missing_paths: List[str] = []
+
+        for directory in candidate_paths:
+            if not directory.exists():
+                missing_paths.append(str(directory))
+                continue
+            for file_path in directory.rglob("*.py"):
+                resolved = file_path.resolve()
+                if resolved in seen_files:
+                    continue
+                try:
+                    relative = file_path.relative_to(self.config.project_root)
+                except ValueError:
+                    relative = Path(file_path.name)
+                relative_str = str(relative)
+                if ignore_patterns and any(fnmatch.fnmatch(relative_str, pattern) for pattern in ignore_patterns):
+                    continue
+                seen_files.add(resolved)
+                try:
+                    source = file_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    read_errors.append(f"{relative_str}:{exc}")
+                    continue
+                analyzed_files.append(file_path)
+                try:
+                    for block in cc_visit(source):
+                        complexities.append((block.complexity, relative, block.name, block.lineno))
+                except Exception as exc:  # noqa: BLE001 - radon failures should surface but not crash
+                    read_errors.append(f"cc:{relative_str}:{exc}")
+                try:
+                    maintainability = mi_visit(source, True)
+                    maintainabilities.append((maintainability, relative))
+                except Exception as exc:  # noqa: BLE001
+                    read_errors.append(f"mi:{relative_str}:{exc}")
+
+        complexity_values = [item[0] for item in complexities if item[0] is not None]
+        avg_complexity = sum(complexity_values) / len(complexity_values) if complexity_values else 0.0
+        max_complexity = max(complexity_values) if complexity_values else 0.0
+        worst_rank = cc_rank(max_complexity) if complexity_values else None
+        maintainability_values = [item[0] for item in maintainabilities]
+        min_maintainability = min(maintainability_values) if maintainability_values else None
+
+        complexity_violations = [
+            {
+                "path": str(item[1]),
+                "name": item[2],
+                "lineno": item[3],
+                "complexity": item[0],
+                "rank": cc_rank(item[0]),
+            }
+            for item in complexities
+            if item[0] is not None and item[0] > function_threshold
+        ]
+
+        maintainability_violations = [
+            {
+                "path": str(item[1]),
+                "maintainability_index": item[0],
+            }
+            for item in maintainabilities
+            if item[0] < maintainability_threshold
+        ]
+
+        status = "passed"
+        details: List[str] = []
+
+        if missing_paths:
+            if not analyzed_files:
+                status = "failed"
+            details.append(f"missing paths: {', '.join(missing_paths)}")
+
+        if not analyzed_files:
+            status = "failed"
+            details.append("no python files discovered for code quality analysis")
+
+        if complexity_values and max_complexity > function_threshold:
+            status = "failed"
+            details.append(
+                f"max cyclomatic complexity {max_complexity:.2f} exceeds threshold {function_threshold:.2f}"
+            )
+
+        if complexity_values and avg_complexity > average_threshold:
+            status = "failed"
+            details.append(
+                f"average cyclomatic complexity {avg_complexity:.2f} exceeds threshold {average_threshold:.2f}"
+            )
+
+        if min_maintainability is not None and min_maintainability < maintainability_threshold:
+            status = "failed"
+            details.append(
+                f"maintainability index {min_maintainability:.2f} below threshold {maintainability_threshold:.2f}"
+            )
+
+        if read_errors:
+            status = "failed"
+            details.append(f"analysis errors in {len(read_errors)} file(s)")
+
+        metrics = {
+            "files_analyzed": len(analyzed_files),
+            "blocks_analyzed": len(complexity_values),
+            "cyclomatic_complexity_avg": round(avg_complexity, 2) if complexity_values else 0.0,
+            "cyclomatic_complexity_max": round(max_complexity, 2) if complexity_values else 0.0,
+            "cyclomatic_complexity_rank": worst_rank,
+            "maintainability_index_min": round(min_maintainability, 2) if min_maintainability is not None else None,
+            "threshold_function": function_threshold,
+            "threshold_average": average_threshold,
+            "threshold_maintainability": maintainability_threshold,
+        }
+
+        artifacts = {
+            "complexity_violations": complexity_violations,
+            "maintainability_violations": maintainability_violations,
+            "ignore_patterns": ignore_patterns,
+            "analysis_errors": read_errors,
+        }
+
+        if not details and analyzed_files:
+            details.append(f"analyzed {len(analyzed_files)} python file(s)")
+
+        duration = time.perf_counter() - start
+        return ScenarioResult(
+            name="code_quality",
+            status=status,
+            metrics=metrics,
+            details=details,
+            duration_seconds=duration,
+            artifacts=artifacts,
+        )
+
     def _run_ingestion(self) -> Tuple[ScenarioResult, List[str]]:
         docs = sorted(self.config.fixtures_docs.glob("*.pdf"))
         if not docs:
@@ -837,10 +1064,11 @@ class Evaluator:
             f"postgresql://{settings.db_user}:{settings.db_password}"
             f"@{settings.db_host}:{settings.db_port}/{database}"
         )
+
     def _build_scorecard(self, scenarios: Dict[str, ScenarioResult]) -> Dict[str, Any]:
         scenario_payload = {name: self._scenario_to_dict(result) for name, result in scenarios.items()}
 
-        gating_names = ["boot", "ingestion", "queries", "extraction", "math", "perf"]
+        gating_names = ["boot", "code_quality", "ingestion", "queries", "extraction", "math", "perf"]
         gates: Dict[str, bool] = {}
         hard_fail = False
         for name in gating_names:
@@ -882,12 +1110,33 @@ class Evaluator:
                 "embedder_model": settings.embedder_model,
                 "retrieval_k": self.config.retrieval_k,
                 "ingest_time_per_page_budget_sec": self.config.ingest_time_per_page_budget_sec,
+                "code_quality_paths": self._code_quality_env_paths(),
+                "complexity_function_threshold": self.config.complexity_function_threshold,
+                "complexity_average_threshold": self.config.complexity_average_threshold,
+                "maintainability_threshold": self.config.maintainability_threshold,
             },
             "gates": gates,
             "metrics": metrics,
             "scenarios": scenario_payload,
         }
         return payload
+
+    def _code_quality_env_paths(self) -> List[str]:
+        paths: List[str] = []
+        for path in self.config.code_quality_paths:
+            try:
+                paths.append(str(path.relative_to(self.config.project_root)))
+            except ValueError:
+                paths.append(str(path))
+        return paths
+
+    def _safe_float(self, value: Any, default: float) -> float:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _scenario_to_dict(self, scenario: ScenarioResult) -> Dict[str, Any]:
         return {
@@ -961,6 +1210,22 @@ class Evaluator:
         except FileNotFoundError:
             logger.warning("Fixture file not found: %s", path)
         return records
+
+    def _load_quality_fixture(self) -> Dict[str, Any]:
+        path = self.config.fixtures_quality
+        if not path.exists():
+            return {}
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                if isinstance(data, dict):
+                    return data
+                logger.warning("Quality fixture %s is not a JSON object; ignoring", path)
+        except json.JSONDecodeError as exc:
+            logger.warning("Invalid JSON in quality fixture %s: %s", path, exc)
+        except OSError as exc:
+            logger.warning("Unable to read quality fixture %s: %s", path, exc)
+        return {}
 
     def _scores_for_text_matches(self, results: Sequence[ChunkResult], gold_passages: Sequence[str]) -> List[float]:
         normalized_gold = [self._normalize_text(passage) for passage in gold_passages if passage]

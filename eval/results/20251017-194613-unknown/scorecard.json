@@ -1,0 +1,117 @@
+{
+  "env": {
+    "code_quality_paths": [
+      "src"
+    ],
+    "complexity_average_threshold": 5.0,
+    "complexity_function_threshold": 10.0,
+    "embedder_model": "BAAI/bge-small-en-v1.5",
+    "git_sha": "unknown",
+    "ingest_time_per_page_budget_sec": 5.0,
+    "maintainability_threshold": 65.0,
+    "retrieval_k": 5,
+    "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+    "vlm_model": "qwen2-vl:7b-instruct-q4_K_M"
+  },
+  "gates": {
+    "all": false,
+    "boot": true,
+    "code_quality": false,
+    "extraction": false,
+    "ingestion": false,
+    "math": false,
+    "perf": false,
+    "queries": false
+  },
+  "metrics": {
+    "overall_score": 0.0,
+    "runtime_seconds": 0.043924808502197266
+  },
+  "run_id": "20251017-194613-unknown",
+  "scenarios": {
+    "boot": {
+      "artifacts": {
+        "checks": [
+          {
+            "detail": "postgres ready",
+            "latency_seconds": 0.0036981250013923272,
+            "name": "postgres",
+            "status": "passed"
+          },
+          {
+            "detail": "minio ready (200)",
+            "latency_seconds": 0.02582412499759812,
+            "name": "minio",
+            "status": "passed"
+          },
+          {
+            "detail": "ollama ready (200)",
+            "latency_seconds": 0.01225670900021214,
+            "name": "ollama",
+            "status": "passed"
+          },
+          {
+            "detail": "redis ready",
+            "latency_seconds": 0.0006501670068246312,
+            "name": "redis",
+            "status": "passed"
+          },
+          {
+            "detail": "app healthcheck disabled",
+            "latency_seconds": 4.250003257766366e-06,
+            "name": "app",
+            "status": "warn"
+          },
+          {
+            "detail": "worker assumed ready",
+            "latency_seconds": 0.0005114159939694218,
+            "name": "worker",
+            "status": "passed"
+          }
+        ]
+      },
+      "details": [
+        "postgres:passed",
+        "minio:passed",
+        "ollama:passed",
+        "redis:passed",
+        "app:warn",
+        "worker:passed"
+      ],
+      "duration_seconds": 0.04315620799752651,
+      "metrics": {
+        "services_checked": 6,
+        "services_failed": 0,
+        "services_passed": 5,
+        "services_warn": 1
+      },
+      "status": "warn"
+    },
+    "code_quality": {
+      "artifacts": {
+        "analysis_errors": [],
+        "complexity_violations": [],
+        "ignore_patterns": [],
+        "maintainability_violations": []
+      },
+      "details": [
+        "missing paths: /src",
+        "no python files discovered for code quality analysis"
+      ],
+      "duration_seconds": 0.000621749997662846,
+      "metrics": {
+        "blocks_analyzed": 0,
+        "cyclomatic_complexity_avg": 0.0,
+        "cyclomatic_complexity_max": 0.0,
+        "cyclomatic_complexity_rank": null,
+        "files_analyzed": 0,
+        "maintainability_index_min": null,
+        "threshold_average": 6.0,
+        "threshold_function": 12.0,
+        "threshold_maintainability": 60.0
+      },
+      "status": "failed"
+    }
+  },
+  "timestamp": "2025-10-17T19:46:13.464703+00:00"
+}

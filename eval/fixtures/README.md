@@ -6,5 +6,6 @@ Seed data for end-to-end evaluator runs. Populate these files with representativ
 - `queries.jsonl` — One JSON object per line describing retrieval eval prompts.
 - `fields.jsonl` — Targeted field extraction gold labels.
 - `math.jsonl` — Math expression crops + gold-standard LaTeX.
+- `quality.json` — Code-quality thresholds (cyclomatic complexity, maintainability, ignored paths).
 
 All files can start with the stub entries committed here. Replace or extend them as your evaluation coverage grows.

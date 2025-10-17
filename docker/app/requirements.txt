@@ -88,3 +88,8 @@ python-dotenv==1.0.0         # Environment variable management
 tenacity==8.2.3              # Retry logic with backoff
 python-json-logger==2.0.7    # Structured logging
 tqdm==4.66.1                 # Progress bars
+
+# ------------------------------------------------------------------------------
+# Code Quality & Analysis
+# ------------------------------------------------------------------------------
+radon==6.0.1                 # Static analysis for complexity and maintainability
