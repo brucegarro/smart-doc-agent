@@ -13,9 +13,9 @@ import logging
 import re
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 import numpy as np
@@ -73,6 +73,33 @@ VLM_RENDER_SCALE = 2.0
 VLM_RENDER_PADDING = 8.0
 
 
+class _ParseStepTracker:
+    """Utility to measure parse step durations while keeping cyclomatic complexity low."""
+
+    def __init__(self) -> None:
+        self.timings: Dict[str, float] = {}
+        self._step_start: float = time.perf_counter()
+
+    def wrap(self, label: str, key: str, func, *args, **kwargs):  # type: ignore[no-untyped-def]
+        """Execute func, recording elapsed time under the provided label/key."""
+        self._step_start = time.perf_counter()
+        result = func(*args, **kwargs)
+        self._record(label, key)
+        return result
+
+    def skip(self, label: str, key: str) -> None:
+        """Mark a step as skipped and reset the timer baseline."""
+        self.timings[key] = 0.0
+        logger.info("%s timings (s) | %s=0.00 (skipped)", label, key)
+        self._step_start = time.perf_counter()
+
+    def _record(self, label: str, key: str) -> None:
+        now = time.perf_counter()
+        elapsed = now - self._step_start
+        self.timings[key] = elapsed
+        logger.info("%s timings (s) | %s=%.2f", label, key, elapsed)
+        self._step_start = now
+
 @dataclass
 class CaptionCandidate:
     """Detected caption text for figures or tables."""
@@ -119,6 +146,54 @@ class TableCandidate:
     header_rows: Optional[int] = None
     header_cols: Optional[int] = None
 
+
+@dataclass
+class _ReferenceAccumulator:
+    """Mutable state while scanning reference sections."""
+
+    references: List[Reference] = field(default_factory=list)
+    collecting: bool = False
+    current_lines: List[str] = field(default_factory=list)
+    current_page: Optional[int] = None
+    counter: int = 1
+
+    def start_section(self) -> None:
+        self.finalize_current()
+        self.collecting = True
+
+    def end_section(self) -> None:
+        self.finalize_current()
+        self.collecting = False
+
+    def add_block(self, page_num: int, block_text: str) -> None:
+        normalized = re.sub(r"\s+", " ", block_text).strip()
+        if not normalized:
+            return
+        if self.current_lines and REFERENCE_ENTRY_START_PATTERN.match(normalized):
+            self.finalize_current()
+        if not self.current_lines:
+            self.current_page = page_num
+        self.current_lines.append(normalized)
+
+    def finalize_current(self) -> None:
+        if not self.current_lines:
+            self.current_page = None
+            return
+
+        text = re.sub(r"\s+", " ", " ".join(self.current_lines)).strip()
+        self.current_lines = []
+        if not text:
+            self.current_page = None
+            return
+
+        reference = Reference(
+            reference_id=f"ref_{self.counter}",
+            text=text,
+            page=self.current_page,
+        )
+        self.references.append(reference)
+        self.counter += 1
+        self.current_page = None
 
 @dataclass(frozen=True)
 class ParseOptions:
@@ -377,17 +452,20 @@ class PDFParser:
 
     def _enrich_visual_elements_with_vlm(self, tables: List[Table], figures: List[Figure]) -> None:
         """Attach Qwen-VL analysis outputs to tables and figures."""
-        if self._vlm_unavailable:
-            return
-
-        if not tables and not figures:
+        if self._vlm_unavailable or (not tables and not figures):
             return
 
         if self._ensure_vlm_client() is None:
             return
 
-        processed_any = False
+        tables_enriched = self._enrich_tables_with_vlm(tables)
+        figures_enriched = self._enrich_figures_with_vlm(figures)
 
+        if tables_enriched or figures_enriched:
+            self.extraction_methods.add(ExtractionMethod.QWEN_VL)
+
+    def _enrich_tables_with_vlm(self, tables: List[Table]) -> bool:
+        processed_any = False
         for idx, table in enumerate(tables):
             if idx >= VLM_MAX_TABLES:
                 break
@@ -405,7 +483,10 @@ class PDFParser:
                 table.artifacts["qwen_vl_prompt"] = prompt
                 table.artifacts["qwen_vl_model"] = settings.vlm_model
                 processed_any = True
+        return processed_any
 
+    def _enrich_figures_with_vlm(self, figures: List[Figure]) -> bool:
+        processed_any = False
         for idx, figure in enumerate(figures):
             if idx >= VLM_MAX_FIGURES:
                 break
@@ -423,9 +504,7 @@ class PDFParser:
                 figure.artifacts["qwen_vl_prompt"] = prompt
                 figure.artifacts["qwen_vl_model"] = settings.vlm_model
                 processed_any = True
-
-        if processed_any:
-            self.extraction_methods.add(ExtractionMethod.QWEN_VL)
+        return processed_any
 
     def _analyze_document_layout(self) -> Dict[int, List[LayoutDetection]]:
         """Run layout analysis for the full document (cached)."""
@@ -483,61 +562,79 @@ class PDFParser:
     def _collect_captions(self) -> Dict[int, List[CaptionCandidate]]:
         """Collect caption candidates for figures and tables across the document."""
         captions: Dict[int, List[CaptionCandidate]] = defaultdict(list)
-
         for page_index, page in enumerate(self.fitz_doc, start=1):
-            try:
-                blocks = page.get_text("dict").get("blocks", [])
-            except Exception as exc:
-                logger.warning(f"Failed to collect captions on page {page_index}: {exc}")
-                continue
-
-            for block in blocks:
-                if block.get("type") != 0:
-                    continue
-
-                bbox = block.get("bbox") or []
-                if len(bbox) != 4:
-                    continue
-
-                block_text_parts: List[str] = []
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        text = span.get("text", "")
-                        if text:
-                            block_text_parts.append(text)
-
-                block_text = " ".join(block_text_parts).strip()
-                if not block_text:
-                    continue
-
-                match = CAPTION_REGEX.search(block_text)
-                if not match:
-                    continue
-
-                normalized = block_text.lower().lstrip()
-                if not normalized.startswith("figure") and not normalized.startswith("fig") \
-                   and not normalized.startswith("table") and not normalized.startswith("tbl"):
-                    # Ignore inline references like "In Table 2 we..."
-                    continue
-
-                if len(block_text) > 400:
-                    # Unusually long blocks are likely prose rather than captions
-                    continue
-
-                raw_type = match.group(1).lower()
-                caption_type = "figure" if raw_type.startswith("fig") else "table"
-                number = match.group(2)
-
-                candidate = CaptionCandidate(
-                    page=page_index,
-                    text=block_text,
-                    caption_type=caption_type,
-                    number=number,
-                    rect=fitz.Rect(bbox),
-                )
-                captions[page_index].append(candidate)
-
+            page_candidates = self._caption_candidates_for_page(page_index, page)
+            if page_candidates:
+                captions[page_index].extend(page_candidates)
         return captions
+
+    def _caption_candidates_for_page(self, page_index: int, page: fitz.Page) -> List[CaptionCandidate]:
+        blocks = self._safe_page_blocks(page_index, page)
+        candidates: List[CaptionCandidate] = []
+        for block in blocks:
+            candidate = self._caption_candidate_from_block(page_index, block)
+            if candidate:
+                candidates.append(candidate)
+        return candidates
+
+    def _safe_page_blocks(self, page_index: int, page: fitz.Page) -> List[Dict[str, Any]]:
+        try:
+            block_data = page.get_text("dict").get("blocks", [])
+        except Exception as exc:
+            logger.warning("Failed to collect captions on page %s: %s", page_index, exc)
+            return []
+        return block_data
+
+    def _caption_candidate_from_block(
+        self,
+        page_index: int,
+        block: Dict[str, Any],
+    ) -> Optional[CaptionCandidate]:
+        if block.get("type") != 0:
+            return None
+
+        bbox = block.get("bbox") or []
+        if len(bbox) != 4:
+            return None
+
+        block_text = self._flatten_block_text(block)
+        if not block_text or len(block_text) > 400:
+            return None
+
+        match = CAPTION_REGEX.search(block_text)
+        if not match:
+            return None
+
+        if not self._is_caption_prefix(block_text):
+            return None
+
+        raw_type = match.group(1).lower()
+        caption_type = "figure" if raw_type.startswith("fig") else "table"
+        number = match.group(2)
+
+        return CaptionCandidate(
+            page=page_index,
+            text=block_text,
+            caption_type=caption_type,
+            number=number,
+            rect=fitz.Rect(bbox),
+        )
+
+    def _flatten_block_text(self, block: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                if text:
+                    parts.append(text)
+        return " ".join(parts).strip()
+
+    def _is_caption_prefix(self, text: str) -> bool:
+        normalized = text.lower().lstrip()
+        return any(
+            normalized.startswith(prefix)
+            for prefix in ("figure", "fig", "table", "tbl")
+        )
 
     def _match_caption(
         self,
@@ -582,116 +679,140 @@ class PDFParser:
         return candidates.pop(best_index)
 
     def parse(self) -> UnifiedDocumentRepresentation:
-        """
-        Parse PDF and create hierarchical UDR.
-        
-        Returns:
-            UnifiedDocumentRepresentation with pages → blocks → spans structure
-        """
-        logger.info(f"Parsing PDF: {self.pdf_path.name}")
+        """Parse the PDF and build a unified representation."""
+        logger.info("Parsing PDF: %s", self.pdf_path.name)
 
-        timings: Dict[str, float] = {}
+        tracker = _ParseStepTracker()
         overall_start = time.perf_counter()
-        step_start = overall_start
 
-        def record_step(label: str, key: str) -> None:
-            nonlocal step_start
-            now = time.perf_counter()
-            elapsed = now - step_start
-            timings[key] = elapsed
-            logger.info("%s timings (s) | %s=%.2f", label, key, elapsed)
-            step_start = now
-
-        def mark_skipped(label: str, key: str) -> None:
-            nonlocal step_start
-            timings[key] = 0.0
-            logger.info("%s timings (s) | %s=0.00 (skipped)", label, key)
-            step_start = time.perf_counter()
-
-        # Extract metadata
-        metadata = self._extract_metadata()
-        record_step("Metadata", "metadata")
-
-        # Extract pages with hierarchical structure
-        pages, ocr_pages = self._extract_pages_with_blocks()
-        record_step("Pages", "pages")
-
-        # Build legacy raw text list (backward compatibility)
+        metadata = tracker.wrap("Metadata", "metadata", self._extract_metadata)
+        pages, ocr_pages = tracker.wrap("Pages", "pages", self._extract_pages_with_blocks)
         raw_page_texts = [page.text for page in pages]
+        sections = tracker.wrap("Sections", "sections", self._extract_sections_from_blocks, pages)
 
-        # Extract sections (heuristic-based from headings)
-        sections = self._extract_sections_from_blocks(pages)
-        record_step("Sections", "sections")
+        layout_by_page, captions_by_page = self._prepare_layout_and_captions(tracker)
+        tables = self._extract_tables_with_timing(layout_by_page, captions_by_page, tracker)
+        figures = self._extract_figures_with_timing(layout_by_page, captions_by_page, tracker)
+        self._maybe_enrich_visuals(tables, figures, tracker)
+        equations = self._extract_equations_with_timing(tracker)
+        references = self._extract_references_with_timing(pages, tracker)
 
-        # Analyze layout (vision-based) and captions for downstream detection
-        layout_by_page: Dict[int, List[LayoutDetection]] = {}
-        captions_by_page: Dict[int, List[CaptionCandidate]] = {}
+        self._update_metadata_page_types(metadata, pages)
+        udr = self._assemble_udr(
+            metadata=metadata,
+            pages=pages,
+            raw_page_texts=raw_page_texts,
+            sections=sections,
+            tables=tables,
+            figures=figures,
+            equations=equations,
+            references=references,
+            ocr_pages=ocr_pages,
+        )
 
-        if (
+        total_duration = time.perf_counter() - overall_start
+        tracker.timings["total"] = total_duration
+        logger.info("Total timings (s) | total=%.2f", total_duration)
+        self._log_parse_summary(metadata, sections, tables, pages)
+
+        return udr
+
+    def _prepare_layout_and_captions(
+        self,
+        tracker: _ParseStepTracker,
+    ) -> Tuple[Dict[int, List[LayoutDetection]], Dict[int, List[CaptionCandidate]]]:
+        should_analyze_layout = (
             self.options.enable_layout_analysis
             or self.options.enable_table_detection
             or self.options.enable_figure_detection
-        ):
-            if self.options.enable_layout_analysis:
-                layout_by_page = self._analyze_document_layout()
-                record_step("Layout", "layout")
-            else:
-                mark_skipped("Layout", "layout")
+        )
+        if not should_analyze_layout:
+            tracker.skip("Layout", "layout")
+            tracker.skip("Captions", "captions")
+            return {}, {}
 
-            if self.options.enable_table_detection or self.options.enable_figure_detection:
-                captions_by_page = self._collect_captions()
-                record_step("Captions", "captions")
-            else:
-                mark_skipped("Captions", "captions")
+        layout_by_page: Dict[int, List[LayoutDetection]] = {}
+        if self.options.enable_layout_analysis:
+            layout_by_page = tracker.wrap("Layout", "layout", self._analyze_document_layout)
         else:
-            mark_skipped("Layout", "layout")
-            mark_skipped("Captions", "captions")
+            tracker.skip("Layout", "layout")
 
-        # Extract tables and figures using multi-signal fusion
-        tables: List[Table] = []
-        if self.options.enable_table_detection:
-            tables = self._extract_tables(layout_by_page, captions_by_page)
-            record_step("Tables", "tables")
+        captions_by_page: Dict[int, List[CaptionCandidate]] = {}
+        if self.options.enable_table_detection or self.options.enable_figure_detection:
+            captions_by_page = tracker.wrap("Captions", "captions", self._collect_captions)
         else:
-            mark_skipped("Tables", "tables")
+            tracker.skip("Captions", "captions")
 
-        figures: List[Figure] = []
-        if self.options.enable_figure_detection:
-            figures = self._extract_figures(layout_by_page, captions_by_page)
-            record_step("Figures", "figures")
-        else:
-            mark_skipped("Figures", "figures")
+        return layout_by_page, captions_by_page
 
-        # Use vision-language model to analyze visual regions when available
-        if self.options.enable_vlm_enrichment and (tables or figures):
-            self._enrich_visual_elements_with_vlm(tables, figures)
-            record_step("VLM enrichment", "vlm_enrichment")
-        else:
-            mark_skipped("VLM enrichment", "vlm_enrichment")
+    def _extract_tables_with_timing(
+        self,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+        tracker: _ParseStepTracker,
+    ) -> List[Table]:
+        if not self.options.enable_table_detection:
+            tracker.skip("Tables", "tables")
+            return []
+        return tracker.wrap("Tables", "tables", self._extract_tables, layout_by_page, captions_by_page)
 
-        # Extract equations (still heuristic-based with optional OCR)
-        equations: List[Equation] = []
-        if self.options.enable_equation_detection:
-            equations = self._extract_equations()
-            record_step("Equations", "equations")
-        else:
-            mark_skipped("Equations", "equations")
+    def _extract_figures_with_timing(
+        self,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+        tracker: _ParseStepTracker,
+    ) -> List[Figure]:
+        if not self.options.enable_figure_detection:
+            tracker.skip("Figures", "figures")
+            return []
+        return tracker.wrap("Figures", "figures", self._extract_figures, layout_by_page, captions_by_page)
 
-        # Extract references
-        references: List[Reference] = []
-        if self.options.enable_reference_detection:
-            references = self._extract_references(pages)
-            record_step("References", "references")
-        else:
-            mark_skipped("References", "references")
-        
-        # Update metadata with page type distribution
-        metadata.num_digital_pages = sum(1 for p in pages if p.page_type == PageType.DIGITAL)
-        metadata.num_scanned_pages = sum(1 for p in pages if p.page_type == PageType.SCANNED)
-        metadata.num_mixed_pages = sum(1 for p in pages if p.page_type == PageType.MIXED)
-        
-        # Build UDR
-        udr = UnifiedDocumentRepresentation(
+    def _maybe_enrich_visuals(
+        self,
+        tables: List[Table],
+        figures: List[Figure],
+        tracker: _ParseStepTracker,
+    ) -> None:
+        if not (self.options.enable_vlm_enrichment and (tables or figures)):
+            tracker.skip("VLM enrichment", "vlm_enrichment")
+            return
+        tracker.wrap("VLM enrichment", "vlm_enrichment", self._enrich_visual_elements_with_vlm, tables, figures)
+
+    def _extract_equations_with_timing(self, tracker: _ParseStepTracker) -> List[Equation]:
+        if not self.options.enable_equation_detection:
+            tracker.skip("Equations", "equations")
+            return []
+        return tracker.wrap("Equations", "equations", self._extract_equations)
+
+    def _extract_references_with_timing(
+        self,
+        pages: List[Page],
+        tracker: _ParseStepTracker,
+    ) -> List[Reference]:
+        if not self.options.enable_reference_detection:
+            tracker.skip("References", "references")
+            return []
+        return tracker.wrap("References", "references", self._extract_references, pages)
+
+    def _update_metadata_page_types(self, metadata: DocumentMetadata, pages: List[Page]) -> None:
+        metadata.num_digital_pages = sum(1 for page in pages if page.page_type == PageType.DIGITAL)
+        metadata.num_scanned_pages = sum(1 for page in pages if page.page_type == PageType.SCANNED)
+        metadata.num_mixed_pages = sum(1 for page in pages if page.page_type == PageType.MIXED)
+
+    def _assemble_udr(
+        self,
+        *,
+        metadata: DocumentMetadata,
+        pages: List[Page],
+        raw_page_texts: List[str],
+        sections: List[Section],
+        tables: List[Table],
+        figures: List[Figure],
+        equations: List[Equation],
+        references: List[Reference],
+        ocr_pages: List[int],
+    ) -> UnifiedDocumentRepresentation:
+        return UnifiedDocumentRepresentation(
             metadata=metadata,
             pages=pages,
             raw_page_texts=raw_page_texts,
@@ -701,23 +822,27 @@ class PDFParser:
             equations=equations,
             references=references,
             extraction_methods_used=list(self.extraction_methods),
-            ocr_pages=ocr_pages
+            ocr_pages=ocr_pages,
         )
-        
+
+    def _log_parse_summary(
+        self,
+        metadata: DocumentMetadata,
+        sections: List[Section],
+        tables: List[Table],
+        pages: List[Page],
+    ) -> None:
+        block_total = sum(len(page.blocks) for page in pages)
         logger.info(
-            f"Parsed {metadata.num_pages} pages "
-            f"({metadata.num_digital_pages} digital, {metadata.num_scanned_pages} scanned, {metadata.num_mixed_pages} mixed), "
-            f"{len(sections)} sections, "
-            f"{len(tables)} tables, "
-            f"{sum(len(p.blocks) for p in pages)} blocks"
+            "Parsed %s pages (%s digital, %s scanned, %s mixed), %s sections, %s tables, %s blocks",
+            metadata.num_pages,
+            metadata.num_digital_pages,
+            metadata.num_scanned_pages,
+            metadata.num_mixed_pages,
+            len(sections),
+            len(tables),
+            block_total,
         )
-
-        total_duration = time.perf_counter() - overall_start
-        timings["total"] = total_duration
-
-        logger.info("Total timings (s) | total=%.2f", total_duration)
-
-        return udr
     
     def _detect_page_type(self, page: fitz.Page) -> PageType:
         """
@@ -772,78 +897,100 @@ class PDFParser:
         Returns:
             Tuple of (pages, ocr_pages_list)
         """
-        logger.debug(f"Extracting {len(self.fitz_doc)} pages with blocks")
-        
-        pages = []
-        ocr_pages = []
-        
+        logger.debug("Extracting %s pages with blocks", len(self.fitz_doc))
+
+        pages: List[Page] = []
+        ocr_pages: List[int] = []
+
         for page_num, fitz_page in enumerate(self.fitz_doc, start=1):
-            try:
-                # Detect page type
-                page_type = self._detect_page_type(fitz_page)
-                
-                # Extract blocks based on page type
-                if page_type == PageType.SCANNED:
-                    # TODO: Implement PaddleOCR extraction
-                    # For now, fallback to PyMuPDF (will have limited text)
-                    blocks, ocr_applied = self._extract_blocks_pymupdf(fitz_page, page_num)
-                    logger.warning(f"Page {page_num} is scanned but OCR not yet implemented")
-                else:
-                    # Use PyMuPDF for digital/mixed pages
-                    blocks, ocr_applied = self._extract_blocks_pymupdf(fitz_page, page_num)
-                
-                if ocr_applied:
-                    ocr_pages.append(page_num)
-                
-                # Compute average OCR confidence if applicable
-                ocr_confidence = None
-                if ocr_applied and blocks:
-                    confidences = [b.confidence for b in blocks if b.confidence is not None]
-                    if confidences:
-                        ocr_confidence = sum(confidences) / len(confidences)
-                
-                # Get page dimensions
-                rect = fitz_page.rect
-                
-                # Build Page object
-                page = Page(
-                    page_num=page_num,
-                    page_type=page_type,
-                    width=rect.width,
-                    height=rect.height,
-                    text="\n\n".join([b.text for b in blocks if b.text]),
-                    blocks=blocks,
-                    extraction_method=ExtractionMethod.PADDLEOCR if ocr_applied else ExtractionMethod.PYMUPDF,
-                    ocr_applied=ocr_applied,
-                    ocr_confidence=ocr_confidence
-                )
-                
-                pages.append(page)
-                
-                logger.debug(
-                    f"Page {page_num}: {page_type.value}, "
-                    f"{len(blocks)} blocks, "
-                    f"{len(page.text)} chars"
-                )
-                
-            except Exception as e:
-                logger.warning(f"Error extracting page {page_num}: {e}")
-                # Create empty page on error
-                pages.append(Page(
-                    page_num=page_num,
-                    page_type=PageType.DIGITAL,
-                    width=612.0,
-                    height=792.0,
-                    text="",
-                    blocks=[],
-                    extraction_method=ExtractionMethod.PYMUPDF,
-                    ocr_applied=False
-                ))
-        
-        # Mark PyMuPDF as used
+            page, ocr_applied = self._extract_single_page(page_num, fitz_page)
+            pages.append(page)
+            if ocr_applied:
+                ocr_pages.append(page_num)
+
         self.extraction_methods.add(ExtractionMethod.PYMUPDF)
-        
         return pages, ocr_pages
+
+    def _extract_single_page(self, page_num: int, fitz_page: fitz.Page) -> Tuple[Page, bool]:
+        try:
+            page_type = self._detect_page_type(fitz_page)
+            blocks, ocr_applied = self._extract_blocks_for_page(fitz_page, page_type, page_num)
+            ocr_confidence = self._average_block_confidence(blocks) if ocr_applied else None
+            page = self._build_page_model(page_num, page_type, fitz_page, blocks, ocr_applied, ocr_confidence)
+            self._log_page_extract_debug(page_num, page_type, blocks, page.text)
+            return page, ocr_applied
+        except Exception as exc:
+            logger.warning("Error extracting page %s: %s", page_num, exc)
+            return self._empty_page(page_num), False
+
+    def _extract_blocks_for_page(
+        self,
+        fitz_page: fitz.Page,
+        page_type: PageType,
+        page_num: int,
+    ) -> Tuple[List[TextBlock], bool]:
+        if page_type == PageType.SCANNED:
+            blocks, ocr_applied = self._extract_blocks_pymupdf(fitz_page, page_num)
+            logger.warning("Page %s is scanned but OCR not yet implemented", page_num)
+            return blocks, ocr_applied
+        return self._extract_blocks_pymupdf(fitz_page, page_num)
+
+    def _average_block_confidence(self, blocks: List[TextBlock]) -> Optional[float]:
+        confidences = [block.confidence for block in blocks if block.confidence is not None]
+        if not confidences:
+            return None
+        return sum(confidences) / len(confidences)
+
+    def _build_page_model(
+        self,
+        page_num: int,
+        page_type: PageType,
+        fitz_page: fitz.Page,
+        blocks: List[TextBlock],
+        ocr_applied: bool,
+        ocr_confidence: Optional[float],
+    ) -> Page:
+        rect = fitz_page.rect
+        page_text = "\n\n".join(block.text for block in blocks if block.text)
+        extraction_method = ExtractionMethod.PADDLEOCR if ocr_applied else ExtractionMethod.PYMUPDF
+        return Page(
+            page_num=page_num,
+            page_type=page_type,
+            width=rect.width,
+            height=rect.height,
+            text=page_text,
+            blocks=blocks,
+            extraction_method=extraction_method,
+            ocr_applied=ocr_applied,
+            ocr_confidence=ocr_confidence,
+        )
+
+    def _log_page_extract_debug(
+        self,
+        page_num: int,
+        page_type: PageType,
+        blocks: List[TextBlock],
+        page_text: str,
+    ) -> None:
+        logger.debug(
+            "Page %s: %s, %s blocks, %s chars",
+            page_num,
+            page_type.value,
+            len(blocks),
+            len(page_text),
+        )
+
+    def _empty_page(self, page_num: int) -> Page:
+        return Page(
+            page_num=page_num,
+            page_type=PageType.DIGITAL,
+            width=612.0,
+            height=792.0,
+            text="",
+            blocks=[],
+            extraction_method=ExtractionMethod.PYMUPDF,
+            ocr_applied=False,
+        )
     
     def _extract_blocks_pymupdf(
         self, 
@@ -964,28 +1111,40 @@ class PDFParser:
         """
         if not spans:
             return "paragraph"
-        
-        # Get average font size
-        font_sizes = [s.font_size for s in spans if s.font_size]
-        avg_font_size = sum(font_sizes) / len(font_sizes) if font_sizes else 12.0
-        
-        # Check if mostly bold
-        bold_count = sum(1 for s in spans if s.is_bold)
-        mostly_bold = bold_count / len(spans) > 0.5 if spans else False
-        
-        # Heading: Large font + bold
-        if avg_font_size > 14 and mostly_bold:
+
+        if self._is_heading_block(spans):
             return "heading"
-        
-        # List: Starts with number or bullet
-        if re.match(r'^[\d\-•·◦▪▫]+[\.\)]\s+', text):
+
+        if self._is_list_block(text):
             return "list"
-        
-        # Caption: Short + ends with colon
-        if len(text) < 100 and text.strip().endswith(':'):
+
+        if self._is_caption_block(text):
             return "caption"
-        
+
         return "paragraph"
+
+    def _is_heading_block(self, spans: List[TextSpan]) -> bool:
+        avg_font_size = self._average_font_size(spans)
+        return avg_font_size > 14 and self._mostly_bold(spans)
+
+    def _average_font_size(self, spans: List[TextSpan]) -> float:
+        font_sizes = [span.font_size for span in spans if span.font_size]
+        if not font_sizes:
+            return 12.0
+        return sum(font_sizes) / len(font_sizes)
+
+    def _mostly_bold(self, spans: List[TextSpan]) -> bool:
+        if not spans:
+            return False
+        bold_count = sum(1 for span in spans if span.is_bold)
+        return (bold_count / len(spans)) > 0.5
+
+    def _is_list_block(self, text: str) -> bool:
+        return bool(re.match(r'^[\d\-•·◦▪▫]+[\.\)]\s+', text))
+
+    def _is_caption_block(self, text: str) -> bool:
+        trimmed = text.strip()
+        return len(trimmed) < 100 and trimmed.endswith(':')
     
     def _extract_metadata(self) -> DocumentMetadata:
         """Extract document metadata from PDF."""
@@ -1024,39 +1183,50 @@ class PDFParser:
     
     def _extract_title_from_first_page(self) -> Optional[str]:
         """Heuristic: Extract title from first page (usually largest/bold text at top)."""
-        if not self.fitz_doc or len(self.fitz_doc) == 0:
+        if not self.fitz_doc:
             return None
-        
+
         try:
             first_page = self.fitz_doc[0]
-            
-            # Get text blocks with font information
-            blocks = first_page.get_text("dict")["blocks"]
-            
-            # Find largest text in top portion of page
-            candidates = []
-            page_height = first_page.rect.height
-            
-            for block in blocks:
-                if block.get("type") == 0:  # Text block
-                    bbox = block.get("bbox", [])
-                    if len(bbox) >= 4 and bbox[1] < page_height * 0.3:  # Top 30%
-                        for line in block.get("lines", []):
-                            for span in line.get("spans", []):
-                                text = span.get("text", "").strip()
-                                size = span.get("size", 0)
-                                if text and size > 14 and len(text) > 10:  # Likely title
-                                    candidates.append((size, text))
-            
-            if candidates:
-                # Return largest text
-                candidates.sort(reverse=True)
-                return candidates[0][1]
-        
-        except Exception as e:
-            logger.warning(f"Error extracting title: {e}")
-        
-        return None
+            blocks = self._first_page_text_blocks(first_page)
+            candidates = self._title_candidates_from_blocks(first_page, blocks)
+            return self._select_best_title_candidate(candidates)
+        except Exception as exc:
+            logger.warning("Error extracting title: %s", exc)
+            return None
+
+    def _first_page_text_blocks(self, first_page: fitz.Page) -> List[Dict[str, Any]]:
+        block_data = first_page.get_text("dict").get("blocks", [])
+        return [block for block in block_data if block.get("type") == 0]
+
+    def _title_candidates_from_blocks(
+        self,
+        first_page: fitz.Page,
+        blocks: List[Dict[str, Any]],
+    ) -> List[Tuple[float, str]]:
+        candidates: List[Tuple[float, str]] = []
+        page_height = first_page.rect.height
+        cutoff = page_height * 0.3
+
+        for block in blocks:
+            bbox = block.get("bbox", [])
+            if len(bbox) < 4 or bbox[1] >= cutoff:
+                continue
+
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    text = span.get("text", "").strip()
+                    size = float(span.get("size", 0))
+                    if text and size > 14 and len(text) > 10:
+                        candidates.append((size, text))
+
+        return candidates
+
+    def _select_best_title_candidate(self, candidates: List[Tuple[float, str]]) -> Optional[str]:
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
     
     def _extract_abstract_from_first_page(self) -> Optional[str]:
         """Heuristic: Find abstract section on first page."""
@@ -1129,48 +1299,6 @@ class PDFParser:
         
         return sections
     
-    def _extract_tables(self) -> List[Table]:
-        """Extract tables using pdfplumber."""
-        logger.debug("Extracting tables")
-        
-        tables = []
-        self.extraction_methods.add(ExtractionMethod.PDFPLUMBER)
-        
-        for page_num, page in enumerate(self.pdfplumber_doc.pages, start=1):
-            try:
-                page_tables = page.extract_tables()
-                
-                for table_idx, table_data in enumerate(page_tables):
-                    if not table_data:
-                        continue
-                    
-                    # Convert to text representation
-                    text_rows = []
-                    for row in table_data:
-                        row_text = " | ".join([str(cell) if cell else "" for cell in row])
-                        text_rows.append(row_text)
-                    
-                    text = "\n".join(text_rows)
-                    
-                    table = Table(
-                        table_id=f"tbl_p{page_num}_{table_idx}",
-                        page=page_num,
-                        data=table_data,
-                        text=text,
-                        extraction_method=ExtractionMethod.PDFPLUMBER
-                    )
-                    
-                    tables.append(table)
-                    
-                    logger.debug(f"Extracted table from page {page_num}: {len(table_data)} rows")
-                    
-            except Exception as e:
-                logger.warning(f"Error extracting tables from page {page_num}: {e}")
-        
-        logger.debug(f"Extracted {len(tables)} tables total")
-        
-        return tables
-    
     def _extract_figures(
         self,
         layout_by_page: Dict[int, List[LayoutDetection]],
@@ -1179,128 +1307,189 @@ class PDFParser:
         """Extract figures by combining raster images, layout detections, and captions."""
         logger.debug("Extracting figures with fused signals")
 
+        figure_candidates = self._collect_figure_candidates(layout_by_page, captions_by_page)
+        figures = self._build_figures_from_candidates(figure_candidates)
+        logger.debug("Extracted %d figures total", len(figures))
+        return figures
+
+    def _collect_figure_candidates(
+        self,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[FigureCandidate]:
         figure_candidates: List[FigureCandidate] = []
         self.extraction_methods.add(ExtractionMethod.PYMUPDF)
 
-        def merge_candidate(candidate: FigureCandidate):
-            for existing in figure_candidates:
-                if existing.page != candidate.page:
-                    continue
-                if _rect_iou(existing.bbox, candidate.bbox) > 0.5:
-                    if candidate.caption and not existing.caption:
-                        existing.caption = candidate.caption
-                    existing.confidence = max(existing.confidence, candidate.confidence)
-                    if candidate.subtype and not existing.subtype:
-                        existing.subtype = candidate.subtype
-                    return
-            figure_candidates.append(candidate)
-
         for page_index, page in enumerate(self.fitz_doc):
-            page_num = page_index + 1
-            page_rect = page.rect
+            page_candidates = self._figure_candidates_for_page(
+                page_index=page_index,
+                page=page,
+                layout_by_page=layout_by_page,
+                captions_by_page=captions_by_page,
+            )
+            for candidate in page_candidates:
+                self._merge_figure_candidate(figure_candidates, candidate)
 
-            # Strategy 1: layout detections (charts, figures)
-            for detection in layout_by_page.get(page_num, []):
-                label = detection.label.lower()
-                if "caption" in label:
+        return figure_candidates
+
+    def _figure_candidates_for_page(
+        self,
+        *,
+        page_index: int,
+        page: fitz.Page,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[FigureCandidate]:
+        page_num = page_index + 1
+        candidates: List[FigureCandidate] = []
+        candidates.extend(
+            self._figure_candidates_from_layout(page_num, layout_by_page, captions_by_page)
+        )
+        candidates.extend(
+            self._figure_candidates_from_images(page, page_num, captions_by_page)
+        )
+        candidates.extend(
+            self._figure_candidates_from_captions(page, page_num, captions_by_page)
+        )
+        return candidates
+    
+    def _merge_figure_candidate(
+        self,
+        figure_candidates: List[FigureCandidate],
+        candidate: FigureCandidate,
+    ) -> None:
+        for existing in figure_candidates:
+            if existing.page != candidate.page:
+                continue
+            if _rect_iou(existing.bbox, candidate.bbox) > 0.5:
+                if candidate.caption and not existing.caption:
+                    existing.caption = candidate.caption
+                existing.confidence = max(existing.confidence, candidate.confidence)
+                if candidate.subtype and not existing.subtype:
+                    existing.subtype = candidate.subtype
+                return
+        figure_candidates.append(candidate)
+
+    def _figure_candidates_from_layout(
+        self,
+        page_num: int,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[FigureCandidate]:
+        candidates: List[FigureCandidate] = []
+        for detection in layout_by_page.get(page_num, []):
+            label = detection.label.lower()
+            if "caption" in label:
+                continue
+            if label not in {"figure", "image", "chart", "graph", "picture"}:
+                continue
+
+            caption = self._match_caption(captions_by_page, page_num, detection.bbox, "figure")
+            subtype = "chart" if label in {"chart", "graph"} else None
+
+            candidate = FigureCandidate(
+                page=page_num,
+                bbox=detection.bbox,
+                source="layout",
+                confidence=detection.confidence,
+                subtype=subtype,
+                caption=caption,
+            )
+            candidates.append(candidate)
+            self.extraction_methods.add(ExtractionMethod.PADDLEOCR)
+        return candidates
+
+    def _figure_candidates_from_images(
+        self,
+        page: fitz.Page,
+        page_num: int,
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[FigureCandidate]:
+        candidates: List[FigureCandidate] = []
+        try:
+            image_list = page.get_images(full=True)
+        except Exception as exc:
+            logger.warning("Failed to enumerate images on page %s: %s", page_num, exc)
+            return candidates
+
+        for img_index, img in enumerate(image_list):
+            try:
+                xref = img[0]
+                rects = page.get_image_rects(xref)
+                if not rects:
                     continue
-                if label not in {"figure", "image", "chart", "graph", "picture"}:
+
+                img_rect = rects[0]
+                base_image = self.fitz_doc.extract_image(xref)
+                if not base_image:
                     continue
 
-                caption = self._match_caption(captions_by_page, page_num, detection.bbox, "figure")
+                image_bytes = base_image.get("image")
+                if not image_bytes or len(image_bytes) < 5000:
+                    continue
 
-                subtype = None
-                if "chart" in label or "graph" in label:
-                    subtype = "chart"
+                img_area = img_rect.get_area()
+                caption = self._match_caption(captions_by_page, page_num, img_rect, "figure")
+                if img_area < 25000 and not caption:
+                    continue
 
                 candidate = FigureCandidate(
                     page=page_num,
-                    bbox=detection.bbox,
-                    source="layout",
-                    confidence=detection.confidence,
-                    subtype=subtype,
+                    bbox=img_rect,
+                    source="image",
+                    confidence=0.75,
                     caption=caption,
                 )
-                merge_candidate(candidate)
-                self.extraction_methods.add(ExtractionMethod.PADDLEOCR)
-
-            # Strategy 2: raster images on the page
-            try:
-                image_list = page.get_images(full=True)
+                candidates.append(candidate)
             except Exception as exc:
-                logger.warning(f"Failed to enumerate images on page {page_num}: {exc}")
-                image_list = []
+                logger.warning("Error processing image %s on page %s: %s", img_index, page_num, exc)
+        return candidates
 
-            for img_index, img in enumerate(image_list):
-                try:
-                    xref = img[0]
-                    rects = page.get_image_rects(xref)
-                    if not rects:
-                        continue
+    def _figure_candidates_from_captions(
+        self,
+        page: fitz.Page,
+        page_num: int,
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[FigureCandidate]:
+        figure_captions = [
+            caption
+            for caption in captions_by_page.get(page_num, [])
+            if caption.caption_type == "figure"
+        ]
+        if not figure_captions:
+            return []
 
-                    img_rect = rects[0]
-                    base_image = self.fitz_doc.extract_image(xref)
-                    if not base_image:
-                        continue
+        captions_by_page[page_num] = [
+            caption
+            for caption in captions_by_page.get(page_num, [])
+            if caption not in figure_captions
+        ]
 
-                    image_bytes = base_image.get("image")
-                    if not image_bytes or len(image_bytes) < 5000:
-                        continue
-
-                    img_area = img_rect.get_area()
-                    if img_area < 25000:
-                        caption_probe = self._match_caption(captions_by_page, page_num, img_rect, "figure")
-                        if not caption_probe:
-                            continue
-                        caption = caption_probe
-                    else:
-                        caption = self._match_caption(captions_by_page, page_num, img_rect, "figure")
-
-                    candidate = FigureCandidate(
-                        page=page_num,
-                        bbox=img_rect,
-                        source="image",
-                        confidence=0.75,
-                        caption=caption,
-                    )
-                    merge_candidate(candidate)
-                except Exception as exc:
-                    logger.warning(f"Error processing image {img_index} on page {page_num}: {exc}")
-                    continue
-
-            # Strategy 3: leftover captions without matched visuals
-            remaining_captions = [
-                caption
-                for caption in captions_by_page.get(page_num, [])
-                if caption.caption_type == "figure"
-            ]
-
-            if remaining_captions:
-                updated_captions = []
-                for caption in captions_by_page.get(page_num, []):
-                    if caption in remaining_captions:
-                        continue
-                    updated_captions.append(caption)
-                captions_by_page[page_num] = updated_captions
-
-            for caption in remaining_captions:
-                expanded_rect = fitz.Rect(
-                    caption.rect.x0,
-                    max(0.0, caption.rect.y0 - 80.0),
-                    caption.rect.x1,
-                    min(page_rect.y1, caption.rect.y1 + 20.0),
-                )
-
-                candidate = FigureCandidate(
+        page_rect = page.rect
+        candidates: List[FigureCandidate] = []
+        for caption in figure_captions:
+            expanded_rect = fitz.Rect(
+                caption.rect.x0,
+                max(0.0, caption.rect.y0 - 80.0),
+                caption.rect.x1,
+                min(page_rect.y1, caption.rect.y1 + 20.0),
+            )
+            candidates.append(
+                FigureCandidate(
                     page=page_num,
                     bbox=expanded_rect,
                     source="caption",
                     confidence=0.45,
                     caption=caption,
                 )
-                merge_candidate(candidate)
-                self.extraction_methods.add(ExtractionMethod.HEURISTIC)
+            )
+            self.extraction_methods.add(ExtractionMethod.HEURISTIC)
+        return candidates
 
+    def _build_figures_from_candidates(
+        self,
+        figure_candidates: List[FigureCandidate],
+    ) -> List[Figure]:
         figures: List[Figure] = []
         for idx, candidate in enumerate(figure_candidates):
             bbox_model = BoundingBox(
@@ -1318,23 +1507,22 @@ class PDFParser:
             else:
                 extraction_method = ExtractionMethod.HEURISTIC
 
-            figure = Figure(
-                figure_id=f"fig_{idx}",
-                caption=candidate.caption.text if candidate.caption else None,
-                page=candidate.page,
-                bbox=bbox_model,
-                s3_key=None,
-                subtype=candidate.subtype or None,
-                confidence=round(min(candidate.confidence + 0.05, 1.0), 2),
-                caption_id=(candidate.caption.number if candidate.caption else None),
-                artifacts={},
-                extraction_method=extraction_method,
+            figures.append(
+                Figure(
+                    figure_id=f"fig_{idx}",
+                    caption=candidate.caption.text if candidate.caption else None,
+                    page=candidate.page,
+                    bbox=bbox_model,
+                    s3_key=None,
+                    subtype=candidate.subtype or None,
+                    confidence=round(min(candidate.confidence + 0.05, 1.0), 2),
+                    caption_id=(candidate.caption.number if candidate.caption else None),
+                    artifacts={},
+                    extraction_method=extraction_method,
+                )
             )
-            figures.append(figure)
-
-        logger.debug(f"Extracted {len(figures)} figures total")
         return figures
-    
+
     def _extract_tables(
         self,
         layout_by_page: Dict[int, List[LayoutDetection]],
@@ -1342,144 +1530,188 @@ class PDFParser:
     ) -> List[Table]:
         """Extract tables by fusing PDF primitives, layout detection, and captions."""
         logger.debug("Extracting tables with fused signals")
+        table_candidates = self._collect_table_candidates(layout_by_page, captions_by_page)
+        tables = self._build_tables_from_candidates(table_candidates)
+        logger.debug("Extracted %d tables total", len(tables))
+        return tables
 
+    def _collect_table_candidates(
+        self,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+    ) -> List[TableCandidate]:
         table_candidates: List[TableCandidate] = []
         self.extraction_methods.add(ExtractionMethod.PDFPLUMBER)
+        table_settings = self._table_detection_settings()
 
-        def merge_candidate(candidate: TableCandidate):
-            for existing in table_candidates:
-                if existing.page != candidate.page:
-                    continue
-                if _rect_iou(existing.bbox, candidate.bbox) > 0.55:
-                    if not existing.data and candidate.data:
-                        existing.data = candidate.data
-                        existing.extraction_method = candidate.extraction_method
-                    if candidate.caption and not existing.caption:
-                        existing.caption = candidate.caption
-                    existing.confidence = max(existing.confidence, candidate.confidence)
-                    if candidate.header_rows is not None:
-                        existing.header_rows = candidate.header_rows
-                    if candidate.header_cols is not None:
-                        existing.header_cols = candidate.header_cols
-                    return
-            table_candidates.append(candidate)
+        for page_num, plumber_page in enumerate(self.pdfplumber_doc.pages, start=1):
+            page_candidates = self._table_candidates_for_page(
+                page_num=page_num,
+                plumber_page=plumber_page,
+                layout_by_page=layout_by_page,
+                captions_by_page=captions_by_page,
+                table_settings=table_settings,
+            )
+            for candidate in page_candidates:
+                self._merge_table_candidate(table_candidates, candidate)
 
-        def normalize_table_data(table_data: Optional[List[List[str]]]) -> List[List[str]]:
-            """Convert table cells to strings and replace missing values."""
-            cleaned: List[List[str]] = []
-            if not table_data:
-                return cleaned
+        return table_candidates
 
-            for row in table_data:
-                if row is None:
-                    continue
-                cleaned.append(["" if cell is None else str(cell) for cell in row])
+    def _table_candidates_for_page(
+        self,
+        *,
+        page_num: int,
+        plumber_page: pdfplumber.page.Page,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+        table_settings: Dict[str, object],
+    ) -> List[TableCandidate]:
+        candidates: List[TableCandidate] = []
+        candidates.extend(
+            self._table_candidates_from_pdfplumber(
+                page_num,
+                plumber_page,
+                captions_by_page,
+                table_settings,
+            )
+        )
+        candidates.extend(
+            self._table_candidates_from_layout(
+                page_num,
+                plumber_page,
+                layout_by_page,
+                captions_by_page,
+                table_settings,
+            )
+        )
+        return candidates
 
-            return cleaned
-
-        table_settings = {
+    def _table_detection_settings(self) -> Dict[str, object]:
+        return {
             "vertical_strategy": "lines",
             "horizontal_strategy": "lines",
             "snap_tolerance": 3,
         }
 
-        for page_num, plumber_page in enumerate(self.pdfplumber_doc.pages, start=1):
-            # Strategy 1: Tables detected via pdfplumber line analysis
+    def _table_candidates_from_pdfplumber(
+        self,
+        page_num: int,
+        plumber_page: pdfplumber.page.Page,
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+        table_settings: Dict[str, object],
+    ) -> List[TableCandidate]:
+        candidates: List[TableCandidate] = []
+        try:
+            detected_tables = plumber_page.find_tables(table_settings)
+        except Exception as exc:
+            logger.warning("pdfplumber failed on page %s: %s", page_num, exc)
+            detected_tables = []
+
+        for table_obj in detected_tables or []:
             try:
-                detected_tables = plumber_page.find_tables(table_settings)
-            except Exception as exc:
-                logger.warning(f"pdfplumber failed on page {page_num}: {exc}")
-                detected_tables = []
+                data = table_obj.extract()
+            except Exception:
+                data = None
 
-            for table_obj in detected_tables or []:
-                try:
-                    data = table_obj.extract()
-                except Exception:
-                    data = None
+            normalized = self._normalize_table_data(data)
+            bbox = fitz.Rect(*table_obj.bbox)
+            caption = self._match_caption(captions_by_page, page_num, bbox, "table")
 
-                data = normalize_table_data(data)
-
-                bbox = fitz.Rect(*table_obj.bbox)
-                caption = self._match_caption(captions_by_page, page_num, bbox, "table")
-
-                candidate = TableCandidate(
+            candidates.append(
+                TableCandidate(
                     page=page_num,
                     bbox=bbox,
-                    data=data,
+                    data=normalized,
                     extraction_method=ExtractionMethod.PDFPLUMBER,
                     confidence=0.8,
                     caption=caption,
                 )
-                merge_candidate(candidate)
+            )
+        return candidates
 
-            # Strategy 2: Layout detection to catch tables without explicit lines
-            for detection in layout_by_page.get(page_num, []):
-                if detection.label not in {"table", "table caption"}:
-                    continue
+    def _table_candidates_from_layout(
+        self,
+        page_num: int,
+        plumber_page: pdfplumber.page.Page,
+        layout_by_page: Dict[int, List[LayoutDetection]],
+        captions_by_page: Dict[int, List[CaptionCandidate]],
+        table_settings: Dict[str, object],
+    ) -> List[TableCandidate]:
+        candidates: List[TableCandidate] = []
+        for detection in layout_by_page.get(page_num, []):
+            if detection.label not in {"table", "table caption"}:
+                continue
 
-                self.extraction_methods.add(ExtractionMethod.PADDLEOCR)
+            self.extraction_methods.add(ExtractionMethod.PADDLEOCR)
+            caption = self._match_caption(captions_by_page, page_num, detection.bbox, "table")
 
-                caption = self._match_caption(captions_by_page, page_num, detection.bbox, "table")
-
-                # Attempt to extract data from the detected region if not already covered
+            try:
+                cropped = plumber_page.crop((detection.bbox.x0, detection.bbox.y0, detection.bbox.x1, detection.bbox.y1))
+                data = cropped.extract_table(table_settings=table_settings)
+            except Exception:
                 data = None
-                try:
-                    cropped = plumber_page.crop((detection.bbox.x0, detection.bbox.y0, detection.bbox.x1, detection.bbox.y1))
-                    data = cropped.extract_table(table_settings=table_settings)
-                except Exception:
-                    data = None
 
-                data = normalize_table_data(data)
+            normalized = self._normalize_table_data(data)
 
-                candidate = TableCandidate(
+            candidates.append(
+                TableCandidate(
                     page=page_num,
                     bbox=detection.bbox,
-                    data=data,
+                    data=normalized,
                     extraction_method=ExtractionMethod.PADDLEOCR,
                     confidence=detection.confidence,
                     caption=caption,
                 )
-                merge_candidate(candidate)
+            )
+        return candidates
 
+    def _merge_table_candidate(
+        self,
+        table_candidates: List[TableCandidate],
+        candidate: TableCandidate,
+    ) -> None:
+        for existing in table_candidates:
+            if existing.page != candidate.page:
+                continue
+            if _rect_iou(existing.bbox, candidate.bbox) > 0.55:
+                if not existing.data and candidate.data:
+                    existing.data = candidate.data
+                    existing.extraction_method = candidate.extraction_method
+                if candidate.caption and not existing.caption:
+                    existing.caption = candidate.caption
+                existing.confidence = max(existing.confidence, candidate.confidence)
+                if candidate.header_rows is not None:
+                    existing.header_rows = candidate.header_rows
+                if candidate.header_cols is not None:
+                    existing.header_cols = candidate.header_cols
+                return
+        table_candidates.append(candidate)
+
+    def _normalize_table_data(
+        self,
+        table_data: Optional[List[List[str]]],
+    ) -> List[List[str]]:
+        cleaned: List[List[str]] = []
+        if not table_data:
+            return cleaned
+
+        for row in table_data:
+            if row is None:
+                continue
+            cleaned.append(["" if cell is None else str(cell) for cell in row])
+        return cleaned
+
+    def _build_tables_from_candidates(
+        self,
+        table_candidates: List[TableCandidate],
+    ) -> List[Table]:
         tables: List[Table] = []
         for idx, candidate in enumerate(table_candidates):
-            rect_width = candidate.bbox.width
-            rect_height = candidate.bbox.height
-
-            if rect_width < MIN_TABLE_WIDTH or rect_height < MIN_TABLE_HEIGHT:
-                logger.debug(
-                    "Skipping table candidate on page %s (width=%.1f, height=%.1f)",
-                    candidate.page,
-                    rect_width,
-                    rect_height,
-                )
+            if not self._is_valid_table_candidate(candidate):
                 continue
 
-            if rect_height == 0:
-                continue
-
-            aspect_ratio = rect_width / rect_height
-            if aspect_ratio < MIN_TABLE_ASPECT_RATIO or aspect_ratio > MAX_TABLE_ASPECT_RATIO:
-                logger.debug(
-                    "Skipping table candidate on page %s due to aspect ratio %.2f",
-                    candidate.page,
-                    aspect_ratio,
-                )
-                continue
-
-            text_lines: List[str] = []
-            normalized_data = normalize_table_data(candidate.data)
-            if normalized_data:
-                for row in normalized_data:
-                    text_lines.append(" | ".join(row))
-            else:
-                # Fallback to textual extraction from PDF for bounding box region
-                try:
-                    page = self.fitz_doc[candidate.page - 1]
-                    clip_text = page.get_text("text", clip=candidate.bbox)
-                    text_lines = [line.strip() for line in clip_text.splitlines() if line.strip()]
-                except Exception:
-                    text_lines = []
+            normalized_data = self._normalize_table_data(candidate.data)
+            text_lines = self._table_text_lines(candidate, normalized_data)
 
             row_count = len(normalized_data)
             col_count = max((len(row) for row in normalized_data), default=0)
@@ -1497,140 +1729,256 @@ class PDFParser:
                 continue
 
             table_text = "\n".join(text_lines)
-
-            bbox_model = BoundingBox(
-                x0=candidate.bbox.x0,
-                y0=candidate.bbox.y0,
-                x1=candidate.bbox.x1,
-                y1=candidate.bbox.y1,
-                page=candidate.page,
+            tables.append(
+                self._create_table_from_candidate(
+                    idx,
+                    candidate,
+                    normalized_data,
+                    table_text,
+                    has_structured_shape,
+                )
             )
-
-            table = Table(
-                table_id=f"tbl_{idx}",
-                caption=candidate.caption.text if candidate.caption else None,
-                page=candidate.page,
-                bbox=bbox_model,
-                data=normalized_data,
-                text=table_text,
-                subtype="data" if has_structured_shape else None,
-                confidence=round(min(candidate.confidence + 0.1, 1.0), 2),
-                caption_id=(candidate.caption.number if candidate.caption else None),
-                header_rows=candidate.header_rows,
-                header_cols=candidate.header_cols,
-                artifacts={},
-                extraction_method=candidate.extraction_method,
-            )
-            tables.append(table)
-
-        logger.debug(f"Extracted {len(tables)} tables total")
         return tables
+
+    def _is_valid_table_candidate(self, candidate: TableCandidate) -> bool:
+        rect_width = candidate.bbox.width
+        rect_height = candidate.bbox.height
+
+        if rect_width < MIN_TABLE_WIDTH or rect_height < MIN_TABLE_HEIGHT:
+            logger.debug(
+                "Skipping table candidate on page %s (width=%.1f, height=%.1f)",
+                candidate.page,
+                rect_width,
+                rect_height,
+            )
+            return False
+
+        if rect_height == 0:
+            return False
+
+        aspect_ratio = rect_width / rect_height
+        if aspect_ratio < MIN_TABLE_ASPECT_RATIO or aspect_ratio > MAX_TABLE_ASPECT_RATIO:
+            logger.debug(
+                "Skipping table candidate on page %s due to aspect ratio %.2f",
+                candidate.page,
+                aspect_ratio,
+            )
+            return False
+        return True
+
+    def _table_text_lines(
+        self,
+        candidate: TableCandidate,
+        normalized_data: List[List[str]],
+    ) -> List[str]:
+        if normalized_data:
+            return [" | ".join(row) for row in normalized_data]
+
+        try:
+            page = self.fitz_doc[candidate.page - 1]
+            clip_text = page.get_text("text", clip=candidate.bbox)
+            return [line.strip() for line in clip_text.splitlines() if line.strip()]
+        except Exception:
+            return []
+
+    def _create_table_from_candidate(
+        self,
+        index: int,
+        candidate: TableCandidate,
+        normalized_data: List[List[str]],
+        table_text: str,
+        has_structured_shape: bool,
+    ) -> Table:
+        bbox_model = BoundingBox(
+            x0=candidate.bbox.x0,
+            y0=candidate.bbox.y0,
+            x1=candidate.bbox.x1,
+            y1=candidate.bbox.y1,
+            page=candidate.page,
+        )
+
+        return Table(
+            table_id=f"tbl_{index}",
+            caption=candidate.caption.text if candidate.caption else None,
+            page=candidate.page,
+            bbox=bbox_model,
+            data=normalized_data,
+            text=table_text,
+            subtype="data" if has_structured_shape else None,
+            confidence=round(min(candidate.confidence + 0.1, 1.0), 2),
+            caption_id=(candidate.caption.number if candidate.caption else None),
+            header_rows=candidate.header_rows,
+            header_cols=candidate.header_cols,
+            artifacts={},
+            extraction_method=candidate.extraction_method,
+        )
 
     def _extract_equations(self) -> List[Equation]:
         """Extract display equations using text layout heuristics."""
         logger.debug("Extracting equations with layout heuristics")
 
-        equations: List[Equation] = []
         latex_ocr = self._ensure_latex_ocr()
         has_latex_ocr = latex_ocr is not None
+        self._register_equation_methods(has_latex_ocr)
 
+        math_symbols = self._math_symbol_set()
+        equations = self._collect_equations(math_symbols, latex_ocr, has_latex_ocr)
+
+        logger.debug("Extracted %d equations total", len(equations))
+        return equations
+
+    def _register_equation_methods(self, has_latex_ocr: bool) -> None:
         self.extraction_methods.add(ExtractionMethod.PYMUPDF)
         if has_latex_ocr:
             self.extraction_methods.add(ExtractionMethod.QWEN_VL)
 
-        math_symbols = set("=±×÷∑∫∏√∞∂πθλμσΩαβγδ")
+    def _math_symbol_set(self) -> set:
+        return set("=±×÷∑∫∏√∞∂πθλμσΩαβγδ")
 
+    def _collect_equations(
+        self,
+        math_symbols: set,
+        latex_ocr,
+        has_latex_ocr: bool,
+    ) -> List[Equation]:
+        equations: List[Equation] = []
         for page_index, page in enumerate(self.fitz_doc):
-            page_number = page_index + 1
-            try:
-                blocks = page.get_text("dict").get("blocks", [])
-            except Exception as exc:
-                logger.warning(f"Failed to extract text blocks for equations on page {page_number}: {exc}")
+            equations.extend(
+                self._equations_from_page(
+                    page_index,
+                    page,
+                    latex_ocr,
+                    has_latex_ocr,
+                    math_symbols,
+                )
+            )
+        return equations
+    
+    def _equations_from_page(
+        self,
+        page_index: int,
+        page: fitz.Page,
+        latex_ocr,
+        has_latex_ocr: bool,
+        math_symbols: set,
+    ) -> List[Equation]:
+        page_number = page_index + 1
+        try:
+            blocks = page.get_text("dict").get("blocks", [])
+        except Exception as exc:
+            logger.warning(
+                "Failed to extract text blocks for equations on page %s: %s",
+                page_number,
+                exc,
+            )
+            return []
+
+        equations: List[Equation] = []
+        equation_idx = 0
+
+        for block_idx, block in enumerate(blocks):
+            if not self._equation_block_is_candidate(block, blocks, block_idx, math_symbols):
                 continue
 
-            equation_idx = 0
+            block_rect = fitz.Rect(block.get("bbox"))
+            block_text = self._block_text(block)
+            is_display = self._is_display_equation(block, blocks, block_idx)
 
-            for block_idx, block in enumerate(blocks):
-                if block.get("type") != 0:
-                    continue
+            equation_id = f"eq_p{page_number}_{equation_idx}"
+            equation_idx += 1
 
-                bbox_list = block.get("bbox", [])
-                if len(bbox_list) < 4:
-                    continue
+            latex_str, latex_source, confidence = self._run_latex_ocr(
+                page,
+                block_rect,
+                equation_id,
+                latex_ocr,
+                has_latex_ocr,
+            )
 
-                block_rect = fitz.Rect(bbox_list)
-
-                block_text = ""
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        block_text += span.get("text", "")
-                block_text = block_text.strip()
-
-                if not block_text:
-                    continue
-
-                lower_text = block_text.lower()
-                common_words = ["the", "and", "for", "are", "that", "this", "with", "from", "where", "which"]
-                if sum(1 for word in common_words if word in lower_text) >= 3:
-                    continue
-
-                has_math = any(char in math_symbols for char in block_text)
-                has_latex_pattern = bool(re.search(r"[∑∫∏√]|[α-ω]|=", block_text))
-                is_display = self._is_display_equation(block, blocks, block_idx)
-                is_small_centered = is_display and len(block_text) < 200
-
-                if not (is_small_centered and (has_math or has_latex_pattern)):
-                    continue
-
-                equation_id = f"eq_p{page_number}_{equation_idx}"
-                equation_idx += 1
-
-                latex_str = None
-                latex_source = None
-                confidence = None
-
-                if has_latex_ocr:
-                    try:
-                        mat = fitz.Matrix(2.0, 2.0)
-                        pix = page.get_pixmap(matrix=mat, clip=block_rect)
-                        image_bytes = pix.tobytes("png")
-                        img = Image.open(io.BytesIO(image_bytes))
-                        try:
-                            latex_str = latex_ocr(img)
-                        finally:
-                            img.close()
-                        latex_source = ExtractionMethod.QWEN_VL
-                        confidence = 0.8
-                        logger.debug(f"Extracted equation {equation_id}: {latex_str[:50]}...")
-                    except Exception as exc:
-                        logger.warning(f"Error converting equation {equation_id} to LaTeX: {exc}")
-                        latex_str = None
-
-                bbox = BoundingBox(
-                    x0=block_rect.x0,
-                    y0=block_rect.y0,
-                    x1=block_rect.x1,
-                    y1=block_rect.y1,
-                    page=page_number,
-                )
-
-                equation = Equation(
+            equations.append(
+                Equation(
                     equation_id=equation_id,
                     latex=latex_str,
                     text=block_text,
                     page=page_number,
-                    bbox=bbox,
+                    bbox=BoundingBox(
+                        x0=block_rect.x0,
+                        y0=block_rect.y0,
+                        x1=block_rect.x1,
+                        y1=block_rect.y1,
+                        page=page_number,
+                    ),
                     is_inline=not is_display,
                     image_s3_key=None,
                     extraction_method=ExtractionMethod.PYMUPDF,
                     latex_source=latex_source,
                     confidence=confidence,
                 )
-                equations.append(equation)
-
-        logger.debug(f"Extracted {len(equations)} equations total")
+            )
         return equations
-    
+
+    def _block_text(self, block: dict) -> str:
+        block_text = ""
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                block_text += span.get("text", "")
+        return block_text.strip()
+
+    def _equation_block_is_candidate(
+        self,
+        block: dict,
+        all_blocks: List[dict],
+        block_idx: int,
+        math_symbols: set,
+    ) -> bool:
+        if block.get("type") != 0:
+            return False
+
+        bbox_list = block.get("bbox", [])
+        if len(bbox_list) < 4:
+            return False
+
+        block_text = self._block_text(block)
+        if not block_text:
+            return False
+
+        lower_text = block_text.lower()
+        common_words = ["the", "and", "for", "are", "that", "this", "with", "from", "where", "which"]
+        if sum(1 for word in common_words if word in lower_text) >= 3:
+            return False
+
+        has_math = any(char in math_symbols for char in block_text)
+        has_latex_pattern = bool(re.search(r"[∑∫∏√]|[α-ω]|=", block_text))
+        is_display = self._is_display_equation(block, all_blocks, block_idx)
+        is_small_centered = is_display and len(block_text) < 200
+
+        return is_small_centered and (has_math or has_latex_pattern)
+
+    def _run_latex_ocr(
+        self,
+        page: fitz.Page,
+        block_rect: fitz.Rect,
+        equation_id: str,
+        latex_ocr,
+        has_latex_ocr: bool,
+    ) -> Tuple[Optional[str], Optional[ExtractionMethod], Optional[float]]:
+        if not has_latex_ocr:
+            return None, None, None
+
+        try:
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat, clip=block_rect)
+            image_bytes = pix.tobytes("png")
+            img = Image.open(io.BytesIO(image_bytes))
+            try:
+                latex_str = latex_ocr(img)
+            finally:
+                img.close()
+            logger.debug("Extracted equation %s: %s...", equation_id, latex_str[:50])
+            return latex_str, ExtractionMethod.QWEN_VL, 0.8
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.warning("Error converting equation %s to LaTeX: %s", equation_id, exc)
+            return None, None, None
     def _is_display_equation(self, block: dict, all_blocks: List[dict], block_idx: int) -> bool:
         """
         Determine if a block is a display (centered) equation.
@@ -1705,84 +2053,48 @@ class PDFParser:
         """Extract reference entries from detected reference section."""
         logger.debug("Extracting references")
 
-        references: List[Reference] = []
-        collecting = False
-        current_text: List[str] = []
-        current_page: Optional[int] = None
-        ref_counter = 1
-
-        def finalize_current() -> None:
-            nonlocal current_text, current_page, ref_counter
-            if not current_text:
-                return
-            text = re.sub(r"\s+", " ", " ".join(current_text)).strip()
-            if not text:
-                current_text = []
-                current_page = None
-                return
-            reference = Reference(
-                reference_id=f"ref_{ref_counter}",
-                text=text,
-                page=current_page,
-            )
-            references.append(reference)
-            ref_counter += 1
-            current_text = []
-            current_page = None
+        accumulator = _ReferenceAccumulator()
 
         for page in pages:
-            for block in page.blocks:
-                block_text = (block.text or "").strip()
-                if not block_text:
-                    continue
+            section_finished = self._process_reference_page(page, accumulator)
+            if section_finished:
+                break
 
-                if block.block_type == "heading":
-                    if REFERENCE_HEADING_PATTERN.search(block_text):
-                        logger.debug("Detected references section heading: '%s'", block_text)
-                        finalize_current()
-                        collecting = True
-                        current_text = []
-                        current_page = None
-                        continue
-                    if collecting:
-                        finalize_current()
-                        collecting = False
-                        # Once we leave references section we stop scanning further headings
-                        break
-                    continue
+        accumulator.finalize_current()
 
-                if not collecting:
-                    continue
-
-                # Only process paragraph or list-like content for references
-                if block.block_type not in {"paragraph", "list"}:
-                    continue
-
-                normalized = re.sub(r"\s+", " ", block_text).strip()
-                if not normalized:
-                    continue
-
-                if current_text and REFERENCE_ENTRY_START_PATTERN.match(normalized):
-                    finalize_current()
-
-                if not current_text:
-                    current_page = page.page_num
-
-                current_text.append(normalized)
-
-            else:
-                # Only executed if inner loop wasn't broken; continue to next page
-                continue
-            # Inner loop was broken (likely due to leaving references)
-            break
-
-        finalize_current()
-
-        if references:
+        if accumulator.references:
             self.extraction_methods.add(ExtractionMethod.HEURISTIC)
 
-        logger.debug("Extracted %d reference(s)", len(references))
-        return references
+        logger.debug("Extracted %d reference(s)", len(accumulator.references))
+        return accumulator.references
+
+    def _process_reference_page(self, page: Page, accumulator: _ReferenceAccumulator) -> bool:
+        for block in page.blocks:
+            block_text = (block.text or "").strip()
+            if not block_text:
+                continue
+
+            if block.block_type == "heading":
+                if self._is_reference_heading(block_text):
+                    logger.debug("Detected references section heading: '%s'", block_text)
+                    accumulator.start_section()
+                    continue
+                if accumulator.collecting:
+                    accumulator.end_section()
+                    return True
+                continue
+
+            if not accumulator.collecting:
+                continue
+
+            if block.block_type not in {"paragraph", "list"}:
+                continue
+
+            accumulator.add_block(page.page_num, block_text)
+        return False
+
+    def _is_reference_heading(self, text: str) -> bool:
+        return bool(REFERENCE_HEADING_PATTERN.search(text))
 
 
 def parse_pdf(pdf_path: Path, options: Optional[ParseOptions] = None) -> UnifiedDocumentRepresentation:

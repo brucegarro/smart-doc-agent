@@ -4,9 +4,10 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 from uuid import uuid4
 
 from psycopg.types.json import Json
@@ -19,6 +20,15 @@ from agent.ingestion.udr import UnifiedDocumentRepresentation
 from agent.storage import s3_client
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class IngestionContext:
+    pdf_path: Path
+    pdf_hash: str
+    doc_id: str
+    options: ParseOptions
+    source_name: Optional[str]
 
 
 class DocumentProcessor:
@@ -53,127 +63,210 @@ class DocumentProcessor:
             ValueError: If PDF already exists in database
             Exception: If processing fails
         """
-        pdf_path = Path(pdf_path)
-        
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        context = self._build_context(pdf_path, source_name, parse_options)
+        self._log_context(context)
+        return self._ingest_document(context)
 
-        logger.info(f"Processing PDF: {pdf_path.name}")
-        options = parse_options or self.parse_options
-        logger.debug("Parse options: %s", options)
-        
-        # Calculate PDF hash for deduplication
-        pdf_hash = self._calculate_hash(pdf_path)
-        logger.debug(f"PDF hash: {pdf_hash}")
-        
-        # Check if already processed
+    def _build_context(
+        self,
+        pdf_path: Path,
+        source_name: Optional[str],
+        parse_options: Optional[ParseOptions],
+    ) -> IngestionContext:
+        normalized_path = self._normalize_pdf_path(pdf_path)
+        options = self._resolve_parse_options(parse_options)
+        pdf_hash = self._calculate_hash(normalized_path)
+        self._guard_against_duplicates(pdf_hash, normalized_path)
+
+        return IngestionContext(
+            pdf_path=normalized_path,
+            pdf_hash=pdf_hash,
+            doc_id=str(uuid4()),
+            options=options,
+            source_name=source_name,
+        )
+
+    def _log_context(self, context: IngestionContext) -> None:
+        logger.info("Processing PDF: %s", context.pdf_path.name)
+        logger.debug("Parse options: %s", context.options)
+        logger.debug("PDF hash: %s", context.pdf_hash)
+
+    def _normalize_pdf_path(self, pdf_path: Path) -> Path:
+        path = Path(pdf_path)
+        if not path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        return path
+
+    def _resolve_parse_options(self, parse_options: Optional[ParseOptions]) -> ParseOptions:
+        return parse_options or self.parse_options
+
+    def _guard_against_duplicates(self, pdf_hash: str, pdf_path: Path) -> None:
         if self._document_exists(pdf_hash):
             raise ValueError(f"Document already exists: {pdf_path.name} (hash: {pdf_hash})")
-        
-        # Generate document UUID
-        doc_id = str(uuid4())
-        logger.debug(f"Generated doc_id: {doc_id}")
-        
-        s3_key: Optional[str] = None
 
+    def _ingest_document(self, context: IngestionContext) -> str:
+        s3_key: Optional[str] = None
         total_start = time.perf_counter()
+
         try:
-            # 1. Parse PDF
-            logger.info("Step 1/3: Parsing PDF...")
-            parse_start = time.perf_counter()
-            udr = parse_pdf(pdf_path, options=options)
-            parse_elapsed = time.perf_counter() - parse_start
-            num_pages = getattr(udr.metadata, "num_pages", None)
-            if num_pages:
-                pages_per_second = num_pages / parse_elapsed if parse_elapsed else 0.0
-                logger.info(
-                    "Parsed %s page(s) in %.2fs (%.2f pages/s)",
-                    num_pages,
-                    parse_elapsed,
-                    pages_per_second,
-                )
-            else:
-                logger.info("Parsed PDF in %.2fs", parse_elapsed)
-            
-            # 2. Upload to S3
-            logger.info("Step 2/3: Uploading to S3...")
-            s3_key = f"pdfs/{doc_id}/{pdf_path.name}"
-            upload_start = time.perf_counter()
-            self.s3_client.upload_file(
-                file_path=pdf_path,
-                object_name=s3_key
-            )
-            logger.debug(f"Uploaded to S3: {s3_key}")
-            upload_elapsed = time.perf_counter() - upload_start
-            logger.info("Uploaded PDF to object storage in %.2fs", upload_elapsed)
-            
-            # 3. Store in database
-            logger.info("Step 3/3: Storing in database...")
-            db_start = time.perf_counter()
-            self._insert_document(
-                doc_id=doc_id,
-                pdf_hash=pdf_hash,
-                filename=pdf_path.name,
+            udr, parse_metrics = self._parse_document(context.pdf_path, context.options)
+            s3_key, upload_elapsed = self._upload_pdf_to_storage(context.pdf_path, context.doc_id)
+            db_elapsed = self._store_document_metadata(
+                doc_id=context.doc_id,
+                pdf_hash=context.pdf_hash,
+                pdf_path=context.pdf_path,
                 s3_key=s3_key,
                 udr=udr,
-                source_name=source_name
+                source_name=context.source_name,
             )
-            db_elapsed = time.perf_counter() - db_start
-            logger.info("Inserted document metadata in %.2fs", db_elapsed)
-            
-            # 4. Generate retrieval chunks + embeddings
-            logger.info("Step 4/4: Generating retrieval chunks and embeddings...")
-            chunks_start = time.perf_counter()
-            final_status, chunk_stats = self._create_chunks_and_embeddings(doc_id, udr)
-            chunks_elapsed = time.perf_counter() - chunks_start
-            if chunk_stats:
-                logger.info(
-                    "Chunk pipeline: %s chunk(s) built in %.2fs; embeddings %.2fs; DB insert %.2fs",
-                    chunk_stats.get("count", 0),
-                    chunk_stats.get("build_elapsed", 0.0),
-                    chunk_stats.get("embed_elapsed", 0.0),
-                    chunk_stats.get("insert_elapsed", 0.0),
-                )
-            else:
-                logger.info("Chunk pipeline completed in %.2fs", chunks_elapsed)
+            final_status, chunk_stats, chunk_elapsed = self._run_chunk_pipeline(context.doc_id, udr)
             if final_status:
-                self._update_document_status(doc_id, final_status)
+                self._update_document_status(context.doc_id, final_status)
 
             total_elapsed = time.perf_counter() - total_start
-            pages = num_pages
-            if not pages and chunk_stats:
-                pages = chunk_stats.get("pages")
-            if pages:
-                per_page = total_elapsed / pages
-                logger.info(
-                    "✓ Successfully processed %s in %.2fs (%.2fs/page)",
-                    pdf_path.name,
-                    total_elapsed,
-                    per_page,
-                )
-            else:
-                logger.info(
-                    "✓ Successfully processed %s in %.2fs",
-                    pdf_path.name,
-                    total_elapsed,
-                )
-            logger.debug("Processed document id: %s", doc_id)
-            
-            return doc_id
-        
-        except Exception as e:
-            logger.error(f"Failed to process {pdf_path.name}: {e}", exc_info=True)
-            
-            # Clean up S3 if upload succeeded but DB insert failed
-            try:
-                if s3_key and self.s3_client.object_exists(s3_key):
-                    self.s3_client.delete_object(s3_key)
-                    logger.debug(f"Cleaned up S3 object: {s3_key}")
-            except Exception as cleanup_error:
-                logger.warning(f"Failed to clean up S3 object: {cleanup_error}")
-            
+            self._log_processing_success(
+                pdf_path=context.pdf_path,
+                total_elapsed=total_elapsed,
+                parse_metrics=parse_metrics,
+                upload_elapsed=upload_elapsed,
+                db_elapsed=db_elapsed,
+                chunk_elapsed=chunk_elapsed,
+                chunk_stats=chunk_stats,
+            )
+            logger.debug("Processed document id: %s", context.doc_id)
+            return context.doc_id
+        except Exception as exc:
+            self._handle_processing_failure(context.pdf_path, s3_key, exc)
             raise
+
+    def _handle_processing_failure(
+        self,
+        pdf_path: Path,
+        s3_key: Optional[str],
+        exc: Exception,
+    ) -> None:
+        logger.error("Failed to process %s: %s", pdf_path.name, exc, exc_info=True)
+        if not s3_key:
+            return
+        try:
+            if self.s3_client.object_exists(s3_key):
+                self.s3_client.delete_object(s3_key)
+                logger.debug("Cleaned up S3 object: %s", s3_key)
+        except Exception as cleanup_error:  # pragma: no cover - best effort cleanup
+            logger.warning("Failed to clean up S3 object: %s", cleanup_error)
     
+    def _parse_document(
+        self,
+        pdf_path: Path,
+        options: ParseOptions,
+    ) -> Tuple[UnifiedDocumentRepresentation, Dict[str, float]]:
+        logger.info("Step 1/4: Parsing PDF...")
+        parse_start = time.perf_counter()
+        udr = parse_pdf(pdf_path, options=options)
+        parse_elapsed = time.perf_counter() - parse_start
+
+        num_pages = getattr(udr.metadata, "num_pages", None)
+        if num_pages:
+            pages_per_second = num_pages / parse_elapsed if parse_elapsed else 0.0
+            logger.info(
+                "Parsed %s page(s) in %.2fs (%.2f pages/s)",
+                num_pages,
+                parse_elapsed,
+                pages_per_second,
+            )
+        else:
+            logger.info("Parsed PDF in %.2fs", parse_elapsed)
+
+        return udr, {"elapsed": parse_elapsed, "pages": num_pages or 0}
+
+    def _upload_pdf_to_storage(self, pdf_path: Path, doc_id: str) -> Tuple[str, float]:
+        logger.info("Step 2/4: Uploading to S3...")
+        s3_key = f"pdfs/{doc_id}/{pdf_path.name}"
+        upload_start = time.perf_counter()
+        self.s3_client.upload_file(file_path=pdf_path, object_name=s3_key)
+        upload_elapsed = time.perf_counter() - upload_start
+        logger.debug("Uploaded to S3: %s", s3_key)
+        logger.info("Uploaded PDF to object storage in %.2fs", upload_elapsed)
+        return s3_key, upload_elapsed
+
+    def _store_document_metadata(
+        self,
+        *,
+        doc_id: str,
+        pdf_hash: str,
+        pdf_path: Path,
+        s3_key: str,
+        udr: UnifiedDocumentRepresentation,
+        source_name: Optional[str],
+    ) -> float:
+        logger.info("Step 3/4: Storing in database...")
+        db_start = time.perf_counter()
+        self._insert_document(
+            doc_id=doc_id,
+            pdf_hash=pdf_hash,
+            filename=pdf_path.name,
+            s3_key=s3_key,
+            udr=udr,
+            source_name=source_name,
+        )
+        db_elapsed = time.perf_counter() - db_start
+        logger.info("Inserted document metadata in %.2fs", db_elapsed)
+        return db_elapsed
+
+    def _run_chunk_pipeline(
+        self,
+        doc_id: str,
+        udr: UnifiedDocumentRepresentation,
+    ) -> Tuple[Optional[str], Optional[Dict[str, float]], float]:
+        logger.info("Step 4/4: Generating retrieval chunks and embeddings...")
+        chunks_start = time.perf_counter()
+        final_status, chunk_stats = self._create_chunks_and_embeddings(doc_id, udr)
+        chunk_elapsed = time.perf_counter() - chunks_start
+
+        if chunk_stats:
+            logger.info(
+                "Chunk pipeline: %s chunk(s) built in %.2fs; embeddings %.2fs; DB insert %.2fs",
+                chunk_stats.get("count", 0),
+                chunk_stats.get("build_elapsed", 0.0),
+                chunk_stats.get("embed_elapsed", 0.0),
+                chunk_stats.get("insert_elapsed", 0.0),
+            )
+        else:
+            logger.info("Chunk pipeline completed in %.2fs", chunk_elapsed)
+
+        return final_status, chunk_stats, chunk_elapsed
+
+    def _log_processing_success(
+        self,
+        *,
+        pdf_path: Path,
+        total_elapsed: float,
+        parse_metrics: Dict[str, float],
+        upload_elapsed: float,
+        db_elapsed: float,
+        chunk_elapsed: float,
+        chunk_stats: Optional[Dict[str, float]],
+    ) -> None:
+        pages = parse_metrics.get("pages") or (chunk_stats or {}).get("pages")
+        if pages:
+            per_page = total_elapsed / pages if pages else 0.0
+            logger.info(
+                "✓ Successfully processed %s in %.2fs (%.2fs/page)",
+                pdf_path.name,
+                total_elapsed,
+                per_page,
+            )
+        else:
+            logger.info("✓ Successfully processed %s in %.2fs", pdf_path.name, total_elapsed)
+
+        logger.debug(
+            "Timing breakdown - parse: %.2fs, upload: %.2fs, db: %.2fs, chunks: %.2fs",
+            parse_metrics.get("elapsed", 0.0),
+            upload_elapsed,
+            db_elapsed,
+            chunk_elapsed,
+        )
+
     def _calculate_hash(self, pdf_path: Path) -> str:
         """Calculate SHA256 hash of PDF file."""
         sha256 = hashlib.sha256()

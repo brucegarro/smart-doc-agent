@@ -79,7 +79,8 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 
 # Copy application source code
 # In dev mode, this will be overridden by volume mount
-COPY src /app
+COPY src /app/src
+RUN cp -a /app/src/. /app/
 COPY sql /app/sql
 COPY scripts /app/scripts
 

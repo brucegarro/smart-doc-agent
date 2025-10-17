@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from agent.ingestion.udr import (
@@ -15,252 +14,85 @@ from agent.ingestion.udr import (
     UnifiedDocumentRepresentation,
 )
 
+from .payloads import ChunkPayload
+from .text_chunks import estimate_token_count, generate_text_chunks
+
 logger = logging.getLogger(__name__)
 
-# Chunking heuristics
-_MAX_TOKENS_PER_CHUNK = 240
-_TOKEN_OVERLAP = 40
-_MIN_CHARS_PER_CHUNK = 30
 _TABLE_PREVIEW_ROWS = 6
-
-
-@dataclass
-class ChunkPayload:
-    """Represents a chunk that will be stored in the chunks table."""
-
-    content: str
-    content_type: str
-    chunk_index: int
-    page_number: Optional[int] = None
-    section_title: Optional[str] = None
-    token_count: int = 0
-    char_count: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    embedding: Optional[List[float]] = None
 
 
 def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
     """Generate retrieval chunks from the unified document representation."""
-    chunk_index = 0
-    chunks: List[ChunkPayload] = []
-
     block_section_map = _build_block_section_map(udr.sections)
     page_section_map = _build_page_section_map(udr.sections)
+    chunks: List[ChunkPayload] = []
 
-    buffer_text: List[str] = []
-    buffer_blocks: List[Dict[str, Any]] = []
-    buffer_pages: List[int] = []
-    buffer_sections: List[Optional[str]] = []
-    buffer_tokens = 0
+    chunks.extend(generate_text_chunks(udr, block_section_map))
+    chunks.extend(_generate_table_chunks(udr, page_section_map))
+    chunks.extend(_generate_figure_chunks(udr, page_section_map))
+    chunks.extend(_generate_reference_chunks(udr))
 
-    def _capture_overlap(
-        current_text: List[str],
-        current_blocks: List[Dict[str, Any]],
-        current_pages: List[int],
-        current_sections: List[Optional[str]],
-        tokens_per_block: List[int],
-    ) -> Dict[str, Any]:
-        overlap_text: List[str] = []
-        overlap_blocks: List[Dict[str, Any]] = []
-        overlap_pages: List[int] = []
-        overlap_sections: List[Optional[str]] = []
-        overlap_tokens = 0
+    _assign_chunk_indices(chunks)
 
-        for text, block, page, section, token_count in zip(
-            reversed(current_text),
-            reversed(current_blocks),
-            reversed(current_pages),
-            reversed(current_sections),
-            reversed(tokens_per_block),
-        ):
-            overlap_text.insert(0, text)
-            overlap_blocks.insert(0, block)
-            overlap_pages.insert(0, page)
-            overlap_sections.insert(0, section)
-            overlap_tokens += token_count
-            if overlap_tokens >= _TOKEN_OVERLAP:
-                break
+    logger.debug("Generated %s chunk(s)", len(chunks))
+    return chunks
 
-        return {
-            "text": overlap_text,
-            "blocks": overlap_blocks,
-            "pages": overlap_pages,
-            "sections": overlap_sections,
-            "tokens": overlap_tokens,
-        }
 
-    def flush_buffer(force: bool = False, keep_overlap: bool = False) -> None:
-        nonlocal chunk_index, buffer_text, buffer_blocks, buffer_pages
-        nonlocal buffer_sections, buffer_tokens
-
-        if not buffer_text:
-            return
-
-        current_text = buffer_text.copy()
-        current_blocks = buffer_blocks.copy()
-        current_pages = buffer_pages.copy()
-        current_sections = buffer_sections.copy()
-
-        content = "\n\n".join(part for part in current_text if part).strip()
-        if not content:
-            buffer_text.clear()
-            buffer_blocks.clear()
-            buffer_pages.clear()
-            buffer_sections.clear()
-            buffer_tokens = 0
-            return
-
-        if (
-            not force
-            and len(content) < _MIN_CHARS_PER_CHUNK
-            and len(current_blocks) > 1
-        ):
-            # Try to keep small fragments attached to future blocks
-            return
-
-        chunk_section = next((title for title in current_sections if title), None)
-        page_number = min(current_pages) if current_pages else None
-        token_count = _estimate_token_count(content)
-
-        chunk_metadata: Dict[str, Any] = {
-            "source": "text_blocks",
-            "blocks": current_blocks,
-        }
-
-        overlap_data: Optional[Dict[str, Any]] = None
-        if keep_overlap and _TOKEN_OVERLAP > 0:
-            tokens_per_block = [
-                _estimate_token_count(text)
-                for text in current_text
-            ]
-            overlap_data = _capture_overlap(
-                current_text,
-                current_blocks,
-                current_pages,
-                current_sections,
-                tokens_per_block,
-            )
-
-        chunks.append(
-            ChunkPayload(
-                content=content,
-                content_type="text",
-                chunk_index=chunk_index,
-                page_number=page_number,
-                section_title=chunk_section,
-                token_count=token_count,
-                char_count=len(content),
-                metadata=chunk_metadata,
-            )
-        )
-
-        chunk_index += 1
-        buffer_text.clear()
-        buffer_blocks.clear()
-        buffer_pages.clear()
-        buffer_sections.clear()
-        buffer_tokens = 0
-
-        if overlap_data and overlap_data["text"]:
-            buffer_text.extend(overlap_data["text"])
-            buffer_blocks.extend(overlap_data["blocks"])
-            buffer_pages.extend(overlap_data["pages"])
-            buffer_sections.extend(overlap_data["sections"])
-            buffer_tokens = overlap_data["tokens"]
-
-    for page in udr.pages:
-        for block in page.blocks:
-            block_text = (block.text or "").strip()
-            if not block_text:
-                continue
-
-            block_info = {
-                "block_id": block.block_id,
-                "block_type": block.block_type,
-                "page_number": page.page_num,
-                "reading_order": block.reading_order,
-            }
-
-            block_section = block_section_map.get(block.block_id)
-            section_changed = (
-                buffer_sections
-                and block_section
-                and any(section for section in buffer_sections if section)
-                and block_section != next(
-                    (section for section in reversed(buffer_sections) if section),
-                    None,
-                )
-            )
-
-            if block.block_type == "heading":
-                flush_buffer(keep_overlap=False)
-
-            if section_changed:
-                flush_buffer(keep_overlap=False)
-
-            block_tokens = _estimate_token_count(block_text)
-            if buffer_tokens and buffer_tokens + block_tokens > _MAX_TOKENS_PER_CHUNK:
-                flush_buffer(keep_overlap=True)
-
-            buffer_text.append(block_text)
-            buffer_blocks.append(block_info)
-            buffer_pages.append(page.page_num)
-            buffer_sections.append(block_section)
-            buffer_tokens += block_tokens
-
-    flush_buffer(force=True, keep_overlap=False)
-
-    # Tables
+def _generate_table_chunks(
+    udr: UnifiedDocumentRepresentation,
+    page_section_map: Dict[int, str],
+) -> List[ChunkPayload]:
+    chunks: List[ChunkPayload] = []
     for table in udr.tables:
         chunk_content = _build_table_content(table)
         if not chunk_content:
             continue
 
-        section_title = _section_for_page(
-            table.page,
-            page_section_map,
-        )
-
+        section_title = _section_for_page(table.page, page_section_map)
         chunks.append(
             ChunkPayload(
                 content=chunk_content,
                 content_type="table",
-                chunk_index=chunk_index,
+                chunk_index=0,
                 page_number=table.page,
                 section_title=section_title,
-                token_count=_estimate_token_count(chunk_content),
+                token_count=estimate_token_count(chunk_content),
                 char_count=len(chunk_content),
                 metadata=_table_metadata(table),
             )
         )
-        chunk_index += 1
+    return chunks
 
-    # Figures
+
+def _generate_figure_chunks(
+    udr: UnifiedDocumentRepresentation,
+    page_section_map: Dict[int, str],
+) -> List[ChunkPayload]:
+    chunks: List[ChunkPayload] = []
     for figure in udr.figures:
         chunk_content = _build_figure_content(figure)
         if not chunk_content:
             continue
 
-        section_title = _section_for_page(
-            figure.page,
-            page_section_map,
-        )
-
+        section_title = _section_for_page(figure.page, page_section_map)
         chunks.append(
             ChunkPayload(
                 content=chunk_content,
                 content_type="figure",
-                chunk_index=chunk_index,
+                chunk_index=0,
                 page_number=figure.page,
                 section_title=section_title,
-                token_count=_estimate_token_count(chunk_content),
+                token_count=estimate_token_count(chunk_content),
                 char_count=len(chunk_content),
                 metadata=_figure_metadata(figure),
             )
         )
-        chunk_index += 1
+    return chunks
 
-    # References
+
+def _generate_reference_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
+    chunks: List[ChunkPayload] = []
     for reference in udr.references:
         content = (reference.text or "").strip()
         if not content:
@@ -270,10 +102,10 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
             ChunkPayload(
                 content=content,
                 content_type="reference",
-                chunk_index=chunk_index,
+                chunk_index=0,
                 page_number=reference.page,
                 section_title="References",
-                token_count=_estimate_token_count(content),
+                token_count=estimate_token_count(content),
                 char_count=len(content),
                 metadata={
                     "source": "reference_list",
@@ -281,10 +113,12 @@ def build_chunks(udr: UnifiedDocumentRepresentation) -> List[ChunkPayload]:
                 },
             )
         )
-        chunk_index += 1
-
-    logger.debug("Generated %s chunk(s)", len(chunks))
     return chunks
+
+
+def _assign_chunk_indices(chunks: Sequence[ChunkPayload]) -> None:
+    for index, chunk in enumerate(chunks):
+        chunk.chunk_index = index
 
 
 def _build_block_section_map(sections: Sequence[Section]) -> Dict[str, str]:
@@ -382,10 +216,3 @@ def _bbox_to_dict(bbox: Optional[BoundingBox]) -> Optional[Dict[str, float]]:
         "y1": bbox.y1,
         "page": bbox.page,
     }
-
-
-def _estimate_token_count(text: str) -> int:
-    if not text:
-        return 0
-    # Lightweight heuristic: approximate tokens as whitespace-delimited words
-    return max(1, len(text.split()))

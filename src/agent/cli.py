@@ -87,6 +87,87 @@ def _emit_profile_summary(profiler: Optional[cProfile.Profile]) -> None:
             stats_path.unlink()
 
 
+def _start_profiler_if_enabled() -> Optional[cProfile.Profile]:
+    if os.environ.get("SMART_DOC_AGENT_PROFILE", "0") != "1":
+        return None
+
+    profiler = cProfile.Profile()
+    profiler.enable()
+    logger.debug(
+        "Profiling enabled (output path: %s)",
+        os.environ.get("SMART_DOC_AGENT_PROFILE_PATH", str(PROFILE_DEFAULT_PATH)),
+    )
+    return profiler
+
+
+def _set_verbose_logging(verbose: bool) -> Optional[int]:
+    if not verbose:
+        return None
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    root_logger.setLevel(logging.DEBUG)
+    return previous_level
+
+
+def _collect_pdf_files(path: Path, recursive: bool) -> list[Path]:
+    if path.is_file():
+        if path.suffix.lower() != ".pdf":
+            console.print(f"[red]Error: {path} is not a PDF file[/red]")
+            raise typer.Exit(1)
+        return [path]
+
+    if path.is_dir():
+        pattern = "**/*.pdf" if recursive else "*.pdf"
+        pdf_files = sorted(path.glob(pattern))
+        if not pdf_files:
+            console.print(f"[yellow]No PDF files found in {path}[/yellow]")
+            raise typer.Exit(0)
+        return pdf_files
+
+    console.print(f"[red]Unsupported path type: {path}[/red]")
+    raise typer.Exit(1)
+
+
+def _process_pdfs(pdf_files: list[Path], source: Optional[str], verbose: bool) -> dict[str, list[tuple[str, str]]]:
+    results = {"success": [], "failed": [], "skipped": []}
+
+    for idx, pdf_file in enumerate(pdf_files, start=1):
+        console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
+        bucket, payload = _handle_pdf_ingest(pdf_file, source, verbose)
+        results[bucket].append(payload)
+
+    return results
+
+
+def _handle_pdf_ingest(pdf_file: Path, source: Optional[str], verbose: bool) -> tuple[str, tuple[str, str]]:
+    try:
+        doc_id = processor.process_pdf(pdf_file, source_name=source)
+        console.print(f"  ✓ Success → [green]{doc_id}[/green]\n")
+        return "success", (pdf_file.name, doc_id)
+    except ValueError as exc:
+        console.print(f"  ⊘ Skipped: [yellow]{exc}[/yellow]\n")
+        return "skipped", (pdf_file.name, str(exc))
+    except Exception as exc:  # pragma: no cover - surfacing ingest errors
+        console.print(f"  ✗ Failed: [red]{exc}[/red]\n")
+        if verbose:
+            logger.exception("Processing failed")
+        else:
+            logger.error("Processing failed for %s", pdf_file.name)
+        return "failed", (pdf_file.name, str(exc))
+
+
+def _print_ingest_summary(results: dict[str, list[tuple[str, str]]]) -> None:
+    console.print("\n[bold]Summary[/bold]")
+    console.print(f"  ✓ Success: [green]{len(results['success'])}[/green]")
+    console.print(f"  ⊘ Skipped: [yellow]{len(results['skipped'])}[/yellow]")
+    console.print(f"  ✗ Failed:  [red]{len(results['failed'])}[/red]")
+
+    if results["failed"]:
+        console.print("\n[bold red]Failed documents:[/bold red]")
+        for filename, error in results["failed"]:
+            console.print(f"  • {filename}: {error}")
+
+
 @app.command()
 def ingest(
     path: Path = typer.Argument(
@@ -118,81 +199,30 @@ def ingest(
     
     Extracts text, metadata, tables, and stores in database with vector embeddings.
     """
-    profiler: Optional[cProfile.Profile] = None
-    if os.environ.get("SMART_DOC_AGENT_PROFILE", "0") == "1":
-        profiler = cProfile.Profile()
-        profiler.enable()
-        logger.debug(
-            "Profiling enabled (output path: %s)",
-            os.environ.get("SMART_DOC_AGENT_PROFILE_PATH", str(PROFILE_DEFAULT_PATH)),
-        )
-
+    profiler = _start_profiler_if_enabled()
+    previous_level = _set_verbose_logging(verbose)
     try:
-        if verbose:
-            logging.getLogger().setLevel(logging.DEBUG)
-
-        console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
-
-        # Collect PDF files
-        pdf_files = []
-
-        if path.is_file():
-            if path.suffix.lower() == ".pdf":
-                pdf_files.append(path)
-            else:
-                console.print(f"[red]Error: {path} is not a PDF file[/red]")
-                raise typer.Exit(1)
-
-        elif path.is_dir():
-            pattern = "**/*.pdf" if recursive else "*.pdf"
-            pdf_files = list(path.glob(pattern))
-
-            if not pdf_files:
-                console.print(f"[yellow]No PDF files found in {path}[/yellow]")
-                raise typer.Exit(0)
-
-        console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
-
-        # Process each PDF
-        results = {
-            "success": [],
-            "failed": [],
-            "skipped": []
-        }
-
-        for idx, pdf_file in enumerate(pdf_files, start=1):
-            console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
-
-            try:
-                doc_id = processor.process_pdf(pdf_file, source_name=source)
-                results["success"].append((pdf_file.name, doc_id))
-                console.print(f"  ✓ Success → [green]{doc_id}[/green]\n")
-
-            except ValueError as e:
-                # Document already exists
-                results["skipped"].append((pdf_file.name, str(e)))
-                console.print(f"  ⊘ Skipped: [yellow]{e}[/yellow]\n")
-
-            except Exception as e:
-                results["failed"].append((pdf_file.name, str(e)))
-                console.print(f"  ✗ Failed: [red]{e}[/red]\n")
-                if verbose:
-                    logger.exception("Processing failed")
-
-        # Summary
-        console.print("\n[bold]Summary[/bold]")
-        console.print(f"  ✓ Success: [green]{len(results['success'])}[/green]")
-        console.print(f"  ⊘ Skipped: [yellow]{len(results['skipped'])}[/yellow]")
-        console.print(f"  ✗ Failed:  [red]{len(results['failed'])}[/red]")
-
-        if results["failed"]:
-            console.print("\n[bold red]Failed documents:[/bold red]")
-            for filename, error in results["failed"]:
-                console.print(f"  • {filename}: {error}")
+        _run_ingest_command(path, recursive, source, verbose)
     finally:
         if profiler is not None:
             profiler.disable()
+        if previous_level is not None:
+            logging.getLogger().setLevel(previous_level)
         _emit_profile_summary(profiler)
+
+
+def _run_ingest_command(
+    path: Path,
+    recursive: bool,
+    source: Optional[str],
+    verbose: bool,
+) -> None:
+    console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
+    pdf_files = _collect_pdf_files(path, recursive)
+    console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
+
+    results = _process_pdfs(pdf_files, source, verbose)
+    _print_ingest_summary(results)
 
 
 @app.command()
