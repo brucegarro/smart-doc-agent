@@ -9,10 +9,11 @@ import os
 import re
 import sys
 import time
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import httpx
 import psycopg
@@ -61,6 +62,7 @@ class EvaluatorConfig:
     retrieval_k: int = 5
     retrieval_hit_threshold: float = 0.7
     retrieval_ndcg_threshold: float = 0.6
+    retrieval_text_match_threshold: float = 0.82
     query_latency_budget_ms: float = 2000.0
     ingest_time_per_page_budget_sec: float = 5.0
 
@@ -79,6 +81,7 @@ class EvaluatorConfig:
 
         retrieval_hit_threshold = float(os.getenv("EVAL_RETRIEVAL_HIT_THRESHOLD", "0.7"))
         retrieval_ndcg_threshold = float(os.getenv("EVAL_RETRIEVAL_NDCG_THRESHOLD", "0.6"))
+        retrieval_text_match_threshold = float(os.getenv("EVAL_RETRIEVAL_TEXT_MATCH_THRESHOLD", "0.82"))
         query_latency_budget_ms = float(os.getenv("EVAL_QUERY_P95_BUDGET_MS", "2000"))
         ingest_time_per_page_budget_sec = float(os.getenv("EVAL_INGEST_TIME_PER_PAGE_BUDGET_SEC", "5"))
         wait_timeout = float(os.getenv("EVAL_WAIT_TIMEOUT", "180"))
@@ -98,6 +101,7 @@ class EvaluatorConfig:
             retrieval_k=int(os.getenv("EVAL_RETRIEVAL_K", "5")),
             retrieval_hit_threshold=retrieval_hit_threshold,
             retrieval_ndcg_threshold=retrieval_ndcg_threshold,
+            retrieval_text_match_threshold=retrieval_text_match_threshold,
             query_latency_budget_ms=query_latency_budget_ms,
             ingest_time_per_page_budget_sec=ingest_time_per_page_budget_sec,
         )
@@ -488,12 +492,15 @@ class Evaluator:
         hits: List[float] = []
         ndcgs: List[float] = []
         per_query_records: List[Dict[str, Any]] = []
+        best_similarity_scores: List[float] = []
 
         for record in fixtures:
             query = record["query"]
+            gold_passages: List[str] = [str(text) for text in record.get("gold_passages", []) if text]
             gold_chunks: List[str] = [str(cid) for cid in record.get("gold_chunk_ids", [])]
             gold_set = set(gold_chunks)
-            gold_available = bool(gold_set)
+            use_text_matching = bool(gold_passages)
+            gold_available = bool(gold_passages if use_text_matching else gold_set)
 
             start = time.perf_counter()
             try:
@@ -514,24 +521,51 @@ class Evaluator:
             latency = (time.perf_counter() - start) * 1000
             latencies_ms.append(latency)
 
-            retrieved_chunk_ids = [res.chunk_id for res in results]
-            hit = self._hit_at_k(retrieved_chunk_ids, gold_set, k) if gold_available else None
-            ndcg = self._ndcg_at_k(retrieved_chunk_ids, gold_set, k) if gold_available else None
+            retrieved_fingerprints = [res.fingerprint for res in results]
+            retrieved_snippets = [res.snippet for res in results]
+
+            hit: Optional[float] = None
+            ndcg: Optional[float] = None
+            similarity_scores: Optional[List[float]] = None
+            match_strategy = "chunk_id"
+
+            if use_text_matching:
+                match_strategy = "passage"
+                similarity_scores = self._scores_for_text_matches(results, gold_passages)
+                hit = self._hit_from_scores(similarity_scores, self.config.retrieval_text_match_threshold, k)
+                ndcg = self._ndcg_from_scores(similarity_scores, k)
+            elif gold_available:
+                retrieved_chunk_ids = [res.chunk_id for res in results]
+                hit = self._hit_at_k(retrieved_chunk_ids, gold_set, k)
+                ndcg = self._ndcg_at_k(retrieved_chunk_ids, gold_set, k)
 
             if hit is not None:
                 hits.append(hit)
             if ndcg is not None:
                 ndcgs.append(ndcg)
 
-            per_query_records.append({
+            record_entry: Dict[str, Any] = {
                 "id": record.get("id"),
                 "query": query,
                 "latency_ms": latency,
-                "retrieved_chunk_ids": retrieved_chunk_ids,
-                "gold_chunk_ids": gold_chunks,
+                "retrieved_fingerprints": retrieved_fingerprints,
+                "retrieved_snippets": retrieved_snippets,
+                "match_strategy": match_strategy,
                 "hit_at_k": hit,
                 "ndcg_at_k": ndcg,
-            })
+            }
+            if similarity_scores is not None:
+                record_entry["gold_passages"] = gold_passages
+                record_entry["similarity_scores"] = similarity_scores
+                if similarity_scores:
+                    best_score = max(similarity_scores)
+                    record_entry["top_similarity"] = best_score
+                    best_similarity_scores.append(best_score)
+            elif gold_chunks:
+                # Legacy fixtures still rely on chunk identifiers; retain strategy marker
+                record_entry["match_strategy"] = "chunk_id"
+
+            per_query_records.append(record_entry)
 
         metrics: Dict[str, Any] = {
             "queries_run": len(per_query_records),
@@ -541,6 +575,8 @@ class Evaluator:
         metrics["latency_p95_ms"] = self._percentile(latencies_ms, 0.95)
         metrics["hit_at_k_avg"] = sum(hits) / len(hits) if hits else None
         metrics["ndcg_at_k_avg"] = sum(ndcgs) / len(ndcgs) if ndcgs else None
+        metrics["top_similarity_avg"] = sum(best_similarity_scores) / len(best_similarity_scores) if best_similarity_scores else None
+        metrics["top_similarity_all"] = best_similarity_scores
 
         status = "passed"
         details: List[str] = []
@@ -550,6 +586,11 @@ class Evaluator:
         if metrics["ndcg_at_k_avg"] is not None and metrics["ndcg_at_k_avg"] < self.config.retrieval_ndcg_threshold:
             status = "failed"
             details.append(f"ndcg@{k} below threshold {metrics['ndcg_at_k_avg']:.3f}< {self.config.retrieval_ndcg_threshold}")
+        if metrics["top_similarity_avg"] is not None and metrics["top_similarity_avg"] < self.config.retrieval_text_match_threshold:
+            status = "failed"
+            details.append(
+                f"avg top similarity {metrics['top_similarity_avg']:.3f}< {self.config.retrieval_text_match_threshold}"
+            )
         if metrics["latency_p95_ms"] is not None and metrics["latency_p95_ms"] > self.config.query_latency_budget_ms:
             status = "warn" if status != "failed" else status
             details.append(f"p95 latency {metrics['latency_p95_ms']:.1f}ms exceeds budget {self.config.query_latency_budget_ms}ms")
@@ -557,7 +598,7 @@ class Evaluator:
         if not hits and not ndcgs:
             status = "warn" if metrics["queries_run"] else "skipped"
             if status == "warn":
-                details.append("no gold chunk ids provided; metrics skipped")
+                details.append("no gold references provided; metrics skipped")
 
         self._perf_samples["query_latencies_ms"] = latencies_ms
         artifacts = {"queries": per_query_records}
@@ -920,6 +961,59 @@ class Evaluator:
         except FileNotFoundError:
             logger.warning("Fixture file not found: %s", path)
         return records
+
+    def _scores_for_text_matches(self, results: Sequence[ChunkResult], gold_passages: Sequence[str]) -> List[float]:
+        normalized_gold = [self._normalize_text(passage) for passage in gold_passages if passage]
+        scores: List[float] = []
+        for chunk in results:
+            candidate = self._normalize_text(chunk.content or chunk.snippet)
+            scores.append(self._best_similarity(candidate, normalized_gold))
+        return scores
+
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+        return re.sub(r"\s+", " ", text.strip().lower())
+
+    def _best_similarity(self, candidate: str, normalized_gold: Sequence[str]) -> float:
+        if not candidate or not normalized_gold:
+            return 0.0
+        best = 0.0
+        for reference in normalized_gold:
+            if not reference:
+                continue
+            if reference in candidate:
+                return 1.0
+            best = max(best, self._text_similarity(candidate, reference))
+        return best
+
+    def _text_similarity(self, left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        return SequenceMatcher(None, left, right).ratio()
+
+    def _hit_from_scores(self, scores: Sequence[float], threshold: float, k: int) -> Optional[float]:
+        if not scores:
+            return None
+        top_scores = list(scores[:k])
+        if not top_scores:
+            return None
+        return 1.0 if any(score >= threshold for score in top_scores) else 0.0
+
+    def _ndcg_from_scores(self, scores: Sequence[float], k: int) -> Optional[float]:
+        if not scores:
+            return None
+        top_scores = list(scores[:k])
+        if not top_scores:
+            return None
+        dcg = sum(score / math.log2(idx + 2) for idx, score in enumerate(top_scores) if score > 0)
+        ideal = sorted((score for score in top_scores if score > 0), reverse=True)
+        if not ideal:
+            return 0.0
+        idcg = sum(score / math.log2(idx + 2) for idx, score in enumerate(ideal))
+        if idcg == 0:
+            return 0.0
+        return dcg / idcg
 
     def _hit_at_k(self, predicted: Iterable[str], gold: Iterable[str], k: int) -> float:
         if not gold:

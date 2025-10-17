@@ -120,6 +120,31 @@ class TableCandidate:
     header_cols: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class ParseOptions:
+    """Feature toggles for PDF parsing."""
+
+    enable_layout_analysis: bool = True
+    enable_table_detection: bool = True
+    enable_figure_detection: bool = True
+    enable_vlm_enrichment: bool = True
+    enable_equation_detection: bool = True
+    enable_reference_detection: bool = True
+
+    @classmethod
+    def fast_ingest(cls) -> "ParseOptions":
+        """Return options optimized for ingestion speed."""
+
+        return cls(
+            enable_layout_analysis=False,
+            enable_table_detection=False,
+            enable_figure_detection=False,
+            enable_vlm_enrichment=False,
+            enable_equation_detection=False,
+            enable_reference_detection=True,
+        )
+
+
 def _rect_iou(rect_a: fitz.Rect, rect_b: fitz.Rect) -> float:
     """Compute Intersection-over-Union for two rectangles."""
     if rect_a is None or rect_b is None:
@@ -159,8 +184,9 @@ class PDFParser:
     5. Qwen-VL - Math OCR for equations (stub for now)
     """
     
-    def __init__(self, pdf_path: Path):
+    def __init__(self, pdf_path: Path, options: Optional[ParseOptions] = None):
         self.pdf_path = Path(pdf_path)
+        self.options = options or ParseOptions()
         
         if not self.pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {self.pdf_path}")
@@ -172,7 +198,14 @@ class PDFParser:
         
         # Track extraction methods used
         self.extraction_methods = set()
-        self._layout_engine = self._init_layout_engine()
+        if (
+            self.options.enable_layout_analysis
+            or self.options.enable_table_detection
+            or self.options.enable_figure_detection
+        ):
+            self._layout_engine = self._init_layout_engine()
+        else:
+            self._layout_engine = None
         self._layout_cache: Dict[int, List[LayoutDetection]] = {}
         self._latex_ocr = None
         self._latex_ocr_failed = False
@@ -561,73 +594,96 @@ class PDFParser:
         overall_start = time.perf_counter()
         step_start = overall_start
 
-        def log_timing(label: str, key: str) -> None:
-            logger.info("%s timings (s) | %s=%.2f", label, key, timings.get(key, 0.0))
+        def record_step(label: str, key: str) -> None:
+            nonlocal step_start
+            now = time.perf_counter()
+            elapsed = now - step_start
+            timings[key] = elapsed
+            logger.info("%s timings (s) | %s=%.2f", label, key, elapsed)
+            step_start = now
+
+        def mark_skipped(label: str, key: str) -> None:
+            nonlocal step_start
+            timings[key] = 0.0
+            logger.info("%s timings (s) | %s=0.00 (skipped)", label, key)
+            step_start = time.perf_counter()
 
         # Extract metadata
         metadata = self._extract_metadata()
-        now = time.perf_counter()
-        timings["metadata"] = now - step_start
-        log_timing("Metadata", "metadata")
-        step_start = now
+        record_step("Metadata", "metadata")
 
         # Extract pages with hierarchical structure
         pages, ocr_pages = self._extract_pages_with_blocks()
-        now = time.perf_counter()
-        timings["pages"] = now - step_start
-        log_timing("Pages", "pages")
-        step_start = now
+        record_step("Pages", "pages")
 
         # Build legacy raw text list (backward compatibility)
         raw_page_texts = [page.text for page in pages]
 
         # Extract sections (heuristic-based from headings)
         sections = self._extract_sections_from_blocks(pages)
-        now = time.perf_counter()
-        timings["sections"] = now - step_start
-        log_timing("Sections", "sections")
-        step_start = now
+        record_step("Sections", "sections")
 
         # Analyze layout (vision-based) and captions for downstream detection
-        layout_by_page = self._analyze_document_layout()
-        captions_by_page = self._collect_captions()
-        now = time.perf_counter()
-        timings["layout"] = now - step_start
-        log_timing("Layout", "layout")
-        step_start = now
+        layout_by_page: Dict[int, List[LayoutDetection]] = {}
+        captions_by_page: Dict[int, List[CaptionCandidate]] = {}
+
+        if (
+            self.options.enable_layout_analysis
+            or self.options.enable_table_detection
+            or self.options.enable_figure_detection
+        ):
+            if self.options.enable_layout_analysis:
+                layout_by_page = self._analyze_document_layout()
+                record_step("Layout", "layout")
+            else:
+                mark_skipped("Layout", "layout")
+
+            if self.options.enable_table_detection or self.options.enable_figure_detection:
+                captions_by_page = self._collect_captions()
+                record_step("Captions", "captions")
+            else:
+                mark_skipped("Captions", "captions")
+        else:
+            mark_skipped("Layout", "layout")
+            mark_skipped("Captions", "captions")
 
         # Extract tables and figures using multi-signal fusion
-        tables = self._extract_tables(layout_by_page, captions_by_page)
-        now = time.perf_counter()
-        timings["tables"] = now - step_start
-        log_timing("Tables", "tables")
-        step_start = now
+        tables: List[Table] = []
+        if self.options.enable_table_detection:
+            tables = self._extract_tables(layout_by_page, captions_by_page)
+            record_step("Tables", "tables")
+        else:
+            mark_skipped("Tables", "tables")
 
-        figures = self._extract_figures(layout_by_page, captions_by_page)
-        now = time.perf_counter()
-        timings["figures"] = now - step_start
-        log_timing("Figures", "figures")
-        step_start = now
+        figures: List[Figure] = []
+        if self.options.enable_figure_detection:
+            figures = self._extract_figures(layout_by_page, captions_by_page)
+            record_step("Figures", "figures")
+        else:
+            mark_skipped("Figures", "figures")
 
         # Use vision-language model to analyze visual regions when available
-        self._enrich_visual_elements_with_vlm(tables, figures)
-        now = time.perf_counter()
-        timings["vlm_enrichment"] = now - step_start
-        log_timing("VLM enrichment", "vlm_enrichment")
-        step_start = now
+        if self.options.enable_vlm_enrichment and (tables or figures):
+            self._enrich_visual_elements_with_vlm(tables, figures)
+            record_step("VLM enrichment", "vlm_enrichment")
+        else:
+            mark_skipped("VLM enrichment", "vlm_enrichment")
 
         # Extract equations (still heuristic-based with optional OCR)
-        equations = self._extract_equations()
-        now = time.perf_counter()
-        timings["equations"] = now - step_start
-        log_timing("Equations", "equations")
-        step_start = now
+        equations: List[Equation] = []
+        if self.options.enable_equation_detection:
+            equations = self._extract_equations()
+            record_step("Equations", "equations")
+        else:
+            mark_skipped("Equations", "equations")
 
         # Extract references
-        references = self._extract_references(pages)
-        now = time.perf_counter()
-        timings["references"] = now - step_start
-        log_timing("References", "references")
+        references: List[Reference] = []
+        if self.options.enable_reference_detection:
+            references = self._extract_references(pages)
+            record_step("References", "references")
+        else:
+            mark_skipped("References", "references")
         
         # Update metadata with page type distribution
         metadata.num_digital_pages = sum(1 for p in pages if p.page_type == PageType.DIGITAL)
@@ -659,8 +715,8 @@ class PDFParser:
         total_duration = time.perf_counter() - overall_start
         timings["total"] = total_duration
 
-        log_timing("Total", "total")
-        
+        logger.info("Total timings (s) | total=%.2f", total_duration)
+
         return udr
     
     def _detect_page_type(self, page: fitz.Page) -> PageType:
@@ -1729,7 +1785,7 @@ class PDFParser:
         return references
 
 
-def parse_pdf(pdf_path: Path) -> UnifiedDocumentRepresentation:
+def parse_pdf(pdf_path: Path, options: Optional[ParseOptions] = None) -> UnifiedDocumentRepresentation:
     """
     Convenience function to parse a PDF file.
     
@@ -1739,5 +1795,5 @@ def parse_pdf(pdf_path: Path) -> UnifiedDocumentRepresentation:
     Returns:
         UnifiedDocumentRepresentation
     """
-    with PDFParser(pdf_path) as parser:
+    with PDFParser(pdf_path, options=options) as parser:
         return parser.parse()

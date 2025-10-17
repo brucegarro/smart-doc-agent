@@ -14,7 +14,7 @@ from psycopg.types.json import Json
 from agent.config import settings
 from agent.embedding import ChunkPayload, build_chunks, embedding_client
 from agent.db import get_db_connection
-from agent.ingestion.pdf_parser import parse_pdf
+from agent.ingestion.pdf_parser import ParseOptions, parse_pdf
 from agent.ingestion.udr import UnifiedDocumentRepresentation
 from agent.storage import s3_client
 
@@ -24,10 +24,21 @@ logger = logging.getLogger(__name__)
 class DocumentProcessor:
     """Orchestrates PDF ingestion: parse → store → database."""
     
-    def __init__(self):
+    def __init__(self, parse_options: Optional[ParseOptions] = None):
         self.s3_client = s3_client
+        if parse_options is not None:
+            self.parse_options = parse_options
+        elif getattr(settings, "ingestion_fast_mode", True):
+            self.parse_options = ParseOptions.fast_ingest()
+        else:
+            self.parse_options = ParseOptions()
     
-    def process_pdf(self, pdf_path: Path, source_name: Optional[str] = None) -> str:
+    def process_pdf(
+        self,
+        pdf_path: Path,
+        source_name: Optional[str] = None,
+        parse_options: Optional[ParseOptions] = None,
+    ) -> str:
         """
         Process a PDF file through the full ingestion pipeline.
         
@@ -46,8 +57,10 @@ class DocumentProcessor:
         
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
-        
+
         logger.info(f"Processing PDF: {pdf_path.name}")
+        options = parse_options or self.parse_options
+        logger.debug("Parse options: %s", options)
         
         # Calculate PDF hash for deduplication
         pdf_hash = self._calculate_hash(pdf_path)
@@ -68,7 +81,7 @@ class DocumentProcessor:
             # 1. Parse PDF
             logger.info("Step 1/3: Parsing PDF...")
             parse_start = time.perf_counter()
-            udr = parse_pdf(pdf_path)
+            udr = parse_pdf(pdf_path, options=options)
             parse_elapsed = time.perf_counter() - parse_start
             num_pages = getattr(udr.metadata, "num_pages", None)
             if num_pages:

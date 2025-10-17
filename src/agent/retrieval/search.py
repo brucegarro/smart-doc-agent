@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
@@ -21,7 +22,9 @@ class ChunkResult:
     chunk_index: int
     page_number: int
     content_type: str
+    content: str
     snippet: str
+    fingerprint: str
     cosine_similarity: float
 
 
@@ -37,6 +40,15 @@ def _clean_snippet(snippet: Optional[str], *, max_length: int = 200) -> str:
     if len(collapsed) <= max_length:
         return collapsed
     return collapsed[: max_length - 3].rstrip() + "..."
+
+
+def _fingerprint_text(text: str) -> str:
+    """Build a stable fingerprint for chunk matching across runs."""
+    normalized = _whitespace_re.sub(" ", (text or "").strip()).lower()
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return digest[:24]
 
 
 def search_chunks(
@@ -79,7 +91,7 @@ def search_chunks(
             c.chunk_index,
             c.page_number,
             c.content_type,
-            LEFT(c.content, 200) AS snippet,
+            c.content,
             1 - (c.embedding <=> query_vec.vec) AS cosine_similarity
         FROM chunks AS c, query_vec
         {filter_clause}
@@ -94,6 +106,7 @@ def search_chunks(
 
     results: List[ChunkResult] = []
     for row in rows:
+        content = row["content"] or ""
         results.append(
             ChunkResult(
                 chunk_id=str(row["chunk_id"]),
@@ -101,7 +114,9 @@ def search_chunks(
                 chunk_index=row["chunk_index"],
                 page_number=row["page_number"],
                 content_type=row["content_type"],
-                snippet=_clean_snippet(row["snippet"]),
+                content=content,
+                snippet=_clean_snippet(content),
+                fingerprint=_fingerprint_text(content),
                 cosine_similarity=row["cosine_similarity"],
             )
         )

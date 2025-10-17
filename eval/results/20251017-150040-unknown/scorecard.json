@@ -1,0 +1,316 @@
+{
+  "env": {
+    "embedder_model": "BAAI/bge-small-en-v1.5",
+    "git_sha": "unknown",
+    "ingest_time_per_page_budget_sec": 5.0,
+    "retrieval_k": 5,
+    "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+    "vlm_model": "qwen2-vl:7b-instruct-q4_K_M"
+  },
+  "gates": {
+    "all": false,
+    "boot": true,
+    "extraction": true,
+    "ingestion": false,
+    "math": true,
+    "perf": true,
+    "queries": false
+  },
+  "metrics": {
+    "overall_score": 0.3333333333333333,
+    "runtime_seconds": 234.09769082069397
+  },
+  "run_id": "20251017-150040-unknown",
+  "scenarios": {
+    "boot": {
+      "artifacts": {
+        "checks": [
+          {
+            "detail": "postgres ready",
+            "latency_seconds": 0.00477554200188024,
+            "name": "postgres",
+            "status": "passed"
+          },
+          {
+            "detail": "minio ready (200)",
+            "latency_seconds": 0.0122469169946271,
+            "name": "minio",
+            "status": "passed"
+          },
+          {
+            "detail": "ollama ready (200)",
+            "latency_seconds": 0.011976541005424224,
+            "name": "ollama",
+            "status": "passed"
+          },
+          {
+            "detail": "redis ready",
+            "latency_seconds": 0.0005982920047244988,
+            "name": "redis",
+            "status": "passed"
+          },
+          {
+            "detail": "app healthcheck disabled",
+            "latency_seconds": 4.707995685748756e-06,
+            "name": "app",
+            "status": "warn"
+          },
+          {
+            "detail": "worker assumed ready",
+            "latency_seconds": 0.00048091700591612607,
+            "name": "worker",
+            "status": "passed"
+          }
+        ]
+      },
+      "details": [
+        "postgres:passed",
+        "minio:passed",
+        "ollama:passed",
+        "redis:passed",
+        "app:warn",
+        "worker:passed"
+      ],
+      "duration_seconds": 0.030272249998233747,
+      "metrics": {
+        "services_checked": 6,
+        "services_failed": 0,
+        "services_passed": 5,
+        "services_warn": 1
+      },
+      "status": "warn"
+    },
+    "db_setup": {
+      "artifacts": {},
+      "details": [
+        "created:docdb_eval_20251017_150040_unknown"
+      ],
+      "duration_seconds": 0.05345462499826681,
+      "metrics": {
+        "database": "docdb_eval_20251017_150040_unknown"
+      },
+      "status": "passed"
+    },
+    "extraction": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "fields": {
+              "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over existing best results, including ensembles, by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.",
+              "authors": [
+                "Ashish Vaswani",
+                "Noam Shazeer",
+                "Niki Parmar",
+                "Jakob Uszkoreit",
+                "Llion Jones",
+                "Aidan N. Gomez",
+                "Lukasz Kaiser",
+                "Illia Polosukhin"
+              ],
+              "title": "Attention Is All You Need"
+            }
+          }
+        ]
+      },
+      "details": [
+        "extraction scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "ingestion": {
+      "artifacts": {
+        "documents": [
+          "3289efb2-4db1-441f-8e71-58d879270743"
+        ]
+      },
+      "details": [
+        "ingested:3289efb2-4db1-441f-8e71-58d879270743",
+        "ingest time per page 15.59s exceeds budget 5.00s"
+      ],
+      "duration_seconds": 233.88934748199972,
+      "metrics": {
+        "avg_time_per_doc_sec": 233.88934748199972,
+        "document_ids": [
+          "3289efb2-4db1-441f-8e71-58d879270743"
+        ],
+        "documents_attempted": 1,
+        "documents_failed": 0,
+        "documents_ingested": 1,
+        "durations_sec": [
+          233.88934748199972
+        ],
+        "ingest_time_per_page_sec": 15.592623165466648,
+        "total_pages": 15,
+        "total_time_sec": 233.88934748199972
+      },
+      "status": "failed"
+    },
+    "math": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "id": "scaled-attention",
+            "latex_gold": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V",
+            "notes": "Scaled dot-product attention from Section 3.2."
+          }
+        ]
+      },
+      "details": [
+        "math scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "perf": {
+      "artifacts": {},
+      "details": [],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "ingestion_avg_time_sec": 233.88934748199972,
+        "ingestion_total_time_sec": 233.88934748199972,
+        "query_p50_ms": 32.693332999770064,
+        "query_p95_ms": 34.55862080299994
+      },
+      "status": "passed"
+    },
+    "queries": {
+      "artifacts": {
+        "queries": [
+          {
+            "gold_passages": [
+              "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."
+            ],
+            "hit_at_k": 0.0,
+            "id": "attn-arch",
+            "latency_ms": 31.623375005437993,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9580253248652281,
+            "query": "What architecture does the paper introduce?",
+            "retrieved_fingerprints": [
+              "ce49822ce8f3769d9c39f86c",
+              "00efde1e8580c8760efabe3f",
+              "29f81f158c284dd6eace4438",
+              "50f83198d92239ff2b1bc03d",
+              "bc08346660a3aa7177153320"
+            ],
+            "retrieved_snippets": [
+              "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Ne...",
+              "Table 2 summarizes our results and compares our translation quality and training costs to other model architectures from the literature. We estimate the number of floating point operations used to...",
+              "Input-Input Layer5 The Law will never be perfect , but its application should be just - this is what we are missing , in my opinion . <EOS> <pad> The Law will never be perfect , but its application...",
+              "[35] Ilya Sutskever, Oriol Vinyals, and Quoc VV Le. Sequence to sequence learning with neural networks. In Advances in Neural Information Processing Systems , pages 3104\u20133112, 2014. [36] Christian...",
+              "Input-Input Layer5 The Law will never be perfect , but its application should be just - this is what we are missing , in my opinion . <EOS> <pad> The Law will never be perfect , but its application..."
+            ],
+            "similarity_scores": [
+              0.2230971128608924,
+              0.11323328785811733,
+              0.20689655172413793,
+              0.09080459770114943,
+              0.19456366237482117
+            ],
+            "top_similarity": 0.2230971128608924
+          },
+          {
+            "gold_passages": [
+              "The encoder is composed of a stack of N=6 identical layers."
+            ],
+            "hit_at_k": 0.0,
+            "id": "encoder-depth",
+            "latency_ms": 32.693332999770064,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9733592243920325,
+            "query": "How many layers are stacked in the Transformer encoder?",
+            "retrieved_fingerprints": [
+              "6c630f3becee38dac0f71091",
+              "9af87fedfbe95f9ae2aa9815",
+              "255955d5378530019c98a85d",
+              "480444d9cafb3efd1902bf95",
+              "afd565be3348e060b25d411e"
+            ],
+            "retrieved_snippets": [
+              "Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position- wise...",
+              "Table 1: Maximum path lengths, per-layer complexity and minimum number of sequential operations for different layer types. n is the sequence length, d is the representation dimension, k is the kern...",
+              "To the best of our knowledge, however, the Transformer is the first transduction model relying entirely on self-attention to compute representations of its input and output without using sequence-...",
+              "GNMT + RL Ensemble [38] 26.30 41.16 1 . 8 \u00b7 10 20 1 . 1 \u00b7 10 21 ConvS2S Ensemble [9] 26.36 41.29 7 . 7 \u00b7 10 19 1 . 2 \u00b7 10 21 Transformer (base model) 27.3 38.1 3 . 3 \u00b7 10 18 Transformer (big) 28.4...",
+              "In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected feed-forward network, which is applied to each position separately and identically. Thi..."
+            ],
+            "similarity_scores": [
+              0.08416547788873038,
+              0.056162246489859596,
+              0.0685805422647528,
+              0.08353808353808354,
+              0.06546644844517185
+            ],
+            "top_similarity": 0.08416547788873038
+          },
+          {
+            "gold_passages": [
+              "We employ multi-head attention in three different ways: in the encoder-decoder attention layers, in the encoder self-attention layers, and in the decoder self-attention layers."
+            ],
+            "hit_at_k": 0.0,
+            "id": "multihead-uses",
+            "latency_ms": 34.765875003358815,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9965019402413137,
+            "query": "List the three ways multi-head attention is used in the Transformer.",
+            "retrieved_fingerprints": [
+              "3d1c5a32b5371d3a5acf2f3c",
+              "0f82bd00127044a57296691a",
+              "6904862122caf3b30aecb8be",
+              "02b933cb09a7fcfcdd3eee26",
+              "1d5f9daf8878930cb810dd69"
+            ],
+            "retrieved_snippets": [
+              "3.2.3 Applications of Attention in our Model The Transformer uses multi-head attention in three different ways: \u2022 In \"encoder-decoder attention\" layers, the queries come from the previous decoder l...",
+              "4 To illustrate why the dot products get large, assume that the components of q and k are independent random variables with mean 0 and variance 1 . Then their dot product, q \u00b7 k = \ufffd d k i =1 q i k...",
+              "An attention function can be described as mapping a query and a set of key-value pairs to an output, where the query, keys, values, and output are all vectors. The output is computed as a weighted...",
+              "The two most commonly used attention functions are additive attention [ 2 ], and dot-product (multi- plicative) attention. Dot-product attention is identical to our algorithm, except for the scalin...",
+              "\u2217 Equal contribution. Listing order is random. Jakob proposed replacing RNNs with self-attention and started the effort to evaluate this idea. Ashish, with Illia, designed and implemented the first..."
+            ],
+            "similarity_scores": [
+              0.1774982529699511,
+              0.1819645732689211,
+              0.1762917933130699,
+              0.11681643132220795,
+              0.10034602076124567
+            ],
+            "top_similarity": 0.1819645732689211
+          }
+        ]
+      },
+      "details": [
+        "hit@5 below threshold 0.000< 0.7",
+        "avg top similarity 0.163< 0.82"
+      ],
+      "duration_seconds": 0.09908258300856687,
+      "metrics": {
+        "hit_at_k_avg": 0.0,
+        "latency_ms_all": [
+          31.623375005437993,
+          32.693332999770064,
+          34.765875003358815
+        ],
+        "latency_p50_ms": 32.693332999770064,
+        "latency_p95_ms": 34.55862080299994,
+        "ndcg_at_k_avg": 0.9759621631661913,
+        "queries_run": 3,
+        "top_similarity_all": [
+          0.2230971128608924,
+          0.08416547788873038,
+          0.1819645732689211
+        ],
+        "top_similarity_avg": 0.16307572133951465
+      },
+      "status": "failed"
+    }
+  },
+  "timestamp": "2025-10-17T15:04:34.420103+00:00"
+}

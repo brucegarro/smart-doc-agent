@@ -1,0 +1,255 @@
+{
+  "env": {
+    "embedder_model": "BAAI/bge-small-en-v1.5",
+    "git_sha": "unknown",
+    "ingest_time_per_page_budget_sec": 5.0,
+    "retrieval_k": 5,
+    "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+    "vlm_model": "qwen2-vl:7b-instruct-q4_K_M"
+  },
+  "gates": {
+    "all": false,
+    "boot": true,
+    "extraction": true,
+    "ingestion": false,
+    "math": true,
+    "perf": true,
+    "queries": true
+  },
+  "metrics": {
+    "overall_score": 0.5,
+    "runtime_seconds": 210.26455354690552
+  },
+  "run_id": "20251017-142100-unknown",
+  "scenarios": {
+    "boot": {
+      "artifacts": {
+        "checks": [
+          {
+            "detail": "postgres ready",
+            "latency_seconds": 0.0035633749939734116,
+            "name": "postgres",
+            "status": "passed"
+          },
+          {
+            "detail": "minio ready (200)",
+            "latency_seconds": 0.011877042001287919,
+            "name": "minio",
+            "status": "passed"
+          },
+          {
+            "detail": "ollama ready (200)",
+            "latency_seconds": 0.011552833006135188,
+            "name": "ollama",
+            "status": "passed"
+          },
+          {
+            "detail": "redis ready",
+            "latency_seconds": 0.0006197920010890812,
+            "name": "redis",
+            "status": "passed"
+          },
+          {
+            "detail": "app healthcheck disabled",
+            "latency_seconds": 3.792003553826362e-06,
+            "name": "app",
+            "status": "warn"
+          },
+          {
+            "detail": "worker assumed ready",
+            "latency_seconds": 0.000537374995474238,
+            "name": "worker",
+            "status": "passed"
+          }
+        ]
+      },
+      "details": [
+        "postgres:passed",
+        "minio:passed",
+        "ollama:passed",
+        "redis:passed",
+        "app:warn",
+        "worker:passed"
+      ],
+      "duration_seconds": 0.028384000004734844,
+      "metrics": {
+        "services_checked": 6,
+        "services_failed": 0,
+        "services_passed": 5,
+        "services_warn": 1
+      },
+      "status": "warn"
+    },
+    "db_setup": {
+      "artifacts": {},
+      "details": [
+        "created:docdb_eval_20251017_142100_unknown"
+      ],
+      "duration_seconds": 0.0520072919971426,
+      "metrics": {
+        "database": "docdb_eval_20251017_142100_unknown"
+      },
+      "status": "passed"
+    },
+    "extraction": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "fields": {
+              "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over existing best results, including ensembles, by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.",
+              "authors": [
+                "Ashish Vaswani",
+                "Noam Shazeer",
+                "Niki Parmar",
+                "Jakob Uszkoreit",
+                "Llion Jones",
+                "Aidan N. Gomez",
+                "Lukasz Kaiser",
+                "Illia Polosukhin"
+              ],
+              "title": "Attention Is All You Need"
+            }
+          }
+        ]
+      },
+      "details": [
+        "extraction scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "ingestion": {
+      "artifacts": {
+        "documents": [
+          "9a5f7412-9e33-4533-bf7d-32240e22384a"
+        ]
+      },
+      "details": [
+        "ingested:9a5f7412-9e33-4533-bf7d-32240e22384a",
+        "ingest time per page 14.01s exceeds budget 5.00s"
+      ],
+      "duration_seconds": 210.08965280199482,
+      "metrics": {
+        "avg_time_per_doc_sec": 210.08965280199482,
+        "document_ids": [
+          "9a5f7412-9e33-4533-bf7d-32240e22384a"
+        ],
+        "documents_attempted": 1,
+        "documents_failed": 0,
+        "documents_ingested": 1,
+        "durations_sec": [
+          210.08965280199482
+        ],
+        "ingest_time_per_page_sec": 14.00597685346632,
+        "total_pages": 15,
+        "total_time_sec": 210.08965280199482
+      },
+      "status": "failed"
+    },
+    "math": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "id": "scaled-attention",
+            "latex_gold": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V",
+            "notes": "Scaled dot-product attention from Section 3.2."
+          }
+        ]
+      },
+      "details": [
+        "math scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "perf": {
+      "artifacts": {},
+      "details": [],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "ingestion_avg_time_sec": 210.08965280199482,
+        "ingestion_total_time_sec": 210.08965280199482,
+        "query_p50_ms": 31.349166994914412,
+        "query_p95_ms": 31.94815479509998
+      },
+      "status": "passed"
+    },
+    "queries": {
+      "artifacts": {
+        "queries": [
+          {
+            "gold_chunk_ids": [],
+            "hit_at_k": null,
+            "id": "attn-arch",
+            "latency_ms": 27.960792001977097,
+            "ndcg_at_k": null,
+            "query": "What architecture does the paper introduce?",
+            "retrieved_chunk_ids": [
+              "100ad2f9-d10d-4e9d-8484-b0ba9372cec5",
+              "3562f688-e89b-46aa-bdb3-a5dbb8e2a0ff",
+              "1c5543ba-decc-4713-82aa-24075860ee72",
+              "e622f263-a73a-4a16-94be-09ec07151d55",
+              "5b55c1c8-21ab-4181-8f33-517129044085"
+            ]
+          },
+          {
+            "gold_chunk_ids": [],
+            "hit_at_k": null,
+            "id": "encoder-depth",
+            "latency_ms": 32.0147089951206,
+            "ndcg_at_k": null,
+            "query": "How many layers are stacked in the Transformer encoder?",
+            "retrieved_chunk_ids": [
+              "bf08c260-f1d8-4598-a81e-f7ec30e2a224",
+              "c27a41be-6d6e-4bb1-b5a3-33b602ac8422",
+              "ef95c6aa-7cbb-47c1-8a5f-1e340448796b",
+              "30ea2955-c1f7-427e-ab95-d0d0946aab01",
+              "ea98eb6b-b7ee-45bb-b77a-09b24f977c9d"
+            ]
+          },
+          {
+            "gold_chunk_ids": [],
+            "hit_at_k": null,
+            "id": "multihead-uses",
+            "latency_ms": 31.349166994914412,
+            "ndcg_at_k": null,
+            "query": "List the three ways multi-head attention is used in the Transformer.",
+            "retrieved_chunk_ids": [
+              "c377511a-831a-4cb6-85ef-b5a03c1e82e3",
+              "b19620f1-88ad-42d4-b883-ad8e1b7ae790",
+              "18d00742-2910-4af9-a9ab-ba5137dadda6",
+              "879eb92a-2501-476a-8251-ec7544593773",
+              "8e2bef26-1495-495c-ba09-490a04d49d42"
+            ]
+          }
+        ]
+      },
+      "details": [
+        "no gold chunk ids provided; metrics skipped"
+      ],
+      "duration_seconds": 0.09132466799201211,
+      "metrics": {
+        "hit_at_k_avg": null,
+        "latency_ms_all": [
+          27.960792001977097,
+          32.0147089951206,
+          31.349166994914412
+        ],
+        "latency_p50_ms": 31.349166994914412,
+        "latency_p95_ms": 31.94815479509998,
+        "ndcg_at_k_avg": null,
+        "queries_run": 3
+      },
+      "status": "warn"
+    }
+  },
+  "timestamp": "2025-10-17T14:24:31.215612+00:00"
+}
