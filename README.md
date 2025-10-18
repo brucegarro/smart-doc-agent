@@ -2,9 +2,11 @@
 
 Smart Doc Agent ingests research PDFs, builds retrieval-ready knowledge, and provides a RAG-powered query interface that blends embeddings, a vector database, and LLM search. 
 
+![AI Document Processing System Architecture](./AI-Document-Processing-System-Architecture.png)
+
 ## 1. Evaluator Design & Metrics-Driven Development
 
-Our evaluator profile spins up the docker stack stack, replays curated question fixtures, and judges answers with a warm-started `qwen2.5:1.5b` critic so we catch regressions fast.
+Our evaluator profile spins up the docker stack, replays curated question fixtures, and judges answers with a warm-started `qwen2.5:1.5b` critic so we catch regressions fast.
 
 ### 1b. Agent Reflection Matters
 We route every answer through an AI reflection loop: the text LLM drafts a reply, the lightweight judge critiques it, and we feed the judge’s rationale back into development. Alongside answer accuracy, we iterate on parsing speed and code quality every run, so regressions in ingestion throughput or maintainability show up as fast as reasoning slips. This pattern surfaces subtle issues without human review, keeps the 1.5B judge resident for snappy feedback, and gives precise deltas whenever we tweak retrieval or chunking.
@@ -17,10 +19,6 @@ We route every answer through an AI reflection loop: the text LLM drafts a reply
 - `generation_failures`: counts LLM or pipeline exceptions we need to triage
 
 ## 2. System Design Overview
-
-### 2. Design Diagram
-
-![AI Document Processing System Architecture](./AI-Document-Processing-System-Architecture.png)
 
 ### 2a. High-Level Component Roles
 - `Evaluator service`: optional harness container that kicks off scripted CLI sessions, captures responses, and persists scorecards plus judge rationales. This helps us evaluate our code and system changes as we build the system.
@@ -56,6 +54,11 @@ eval_results(id PK, document_id→documents, metric_name, metric_value,
 	      dataset, model_name, table_reference, metadata JSONB)
 ```
 
+- `documents` is the canonical catalog: every ingest step lands metadata, hashes, and the serialized UDR snapshot here so we can reproduce parsing decisions. The `processing_status` flag tracks ingestion progress (`queued`, `processed`, `failed`), while `pdf_hash` prevents duplicate uploads.
+- `chunks` stores retrieval-ready text segments; the `embedding` column uses pgvector (384 dims) and lines up with the in-memory FAISS index used by workers. `metadata` carries provenance such as section labels or figure references.
+- `artifacts_index` keeps table/figure derivatives that we can surface in downstream UIs. Each entry points back to S3 for the rendered artifact and carries structured payloads (e.g., CSV-normalized tables).
+- `eval_results` records offline evaluation metrics. Jobs insert per-document scores with enough context (`dataset`, `model_name`, `table_reference`) to slice quality over time and reconcile with A/B test runs.
+
 ## 3. Install & Run
 
 ### Requirements
@@ -82,6 +85,4 @@ Scorecards land under `eval/results/<run_id>/scorecard.json` and summary rows en
 - `docker compose up app worker` to expose the CLI/API while workers process ingestion queues.
 - `python src/agent/cli.py ingest sample_papers/*.pdf` (inside the `app` container) to queue new documents.
 - Re-run the evaluator whenever retrieval logic changes to keep quality bars honest.
-
-Looking for more? Check `EVAL_RUNBOOK.md` for fixture anatomy and `notebooks/interactive_ingest.ipynb` for a guided ingest walkthrough.
 
