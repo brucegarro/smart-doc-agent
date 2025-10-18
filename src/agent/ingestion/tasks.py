@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from agent.config import settings
+from agent.db import switch_database
 from agent.ingestion.pdf_parser import ParseOptions
 from agent.ingestion.processor import processor
 
@@ -27,6 +28,7 @@ def process_pdf_task(
     staged_pdf_path: str,
     source_name: Optional[str] = None,
     parse_options_payload: Optional[dict[str, bool]] = None,
+    database_override: Optional[str] = None,
 ) -> dict[str, Optional[str]]:
     """Execute the ingestion pipeline for a single staged PDF file."""
 
@@ -35,6 +37,9 @@ def process_pdf_task(
     queue_dir = Path(settings.ingest_queue_dir)
 
     try:
+        if database_override:
+            logger.info("Worker received database override %s", database_override)
+            switch_database(database_override)
         doc_id = processor.process_pdf(pdf_path, source_name=source_name, parse_options=parse_options)
         return {"status": "succeeded", "doc_id": doc_id}
     except ValueError as exc:

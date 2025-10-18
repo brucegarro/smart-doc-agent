@@ -112,6 +112,36 @@ class TextLLMClient:
 
         return str(content).strip()
 
+    def warm_model(
+        self,
+        *,
+        model: Optional[str] = None,
+        prompt: str = "ping",
+        max_tokens: int = 8,
+    ) -> bool:
+        """Issue a lightweight request to ensure the specified model is resident."""
+
+        target_model = model or settings.text_llm_model
+        warm_prompt = prompt.strip() or "ping"
+
+        try:
+            self.generate(
+                warm_prompt,
+                system="Respond briefly with OK.",
+                temperature=0.0,
+                max_tokens=max(1, max_tokens),
+                model=target_model,
+            )
+        except LLMGenerationError as exc:
+            logger.warning("Failed to warm model %s: %s", target_model, exc)
+            return False
+        except Exception as exc:  # noqa: BLE001 - defensive guard
+            logger.warning("Failed to warm model %s: %s", target_model, exc)
+            return False
+
+        logger.debug("Warmed model %s", target_model)
+        return True
+
     def _get_client(self) -> Optional[object]:
         if self._unavailable:
             return None

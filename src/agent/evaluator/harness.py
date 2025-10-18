@@ -25,6 +25,7 @@ from agent.evaluator.models import ScenarioResult
 from agent.evaluator.quality_runner import CodeQualityRunner
 from agent.evaluator.query_runner import QueryScenarioRunner
 from agent.evaluator.answer_runner import AnswerScenarioRunner
+from agent.llm.text_client import text_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,7 @@ class Evaluator:
         self._query_runner = QueryScenarioRunner(self.config, self._load_jsonl, self._percentile)
         self._quality_runner = CodeQualityRunner(self.config)
         self._answer_runner = AnswerScenarioRunner(self.config, self._load_jsonl)
+        self._judge_model_warmed = False
 
     def run(self) -> int:
         logger.info("Starting evaluator run %s", self.config.run_id)
@@ -226,7 +228,14 @@ class Evaluator:
                 return self._finalize_run(scenario_results, ingestion_doc_ids)
 
             try:
-                ingestion_result, ingestion_doc_ids, ingestion_times = self._ingestion_runner.run()
+                db_override = self._db_manager.current_db()
+                if db_override:
+                    logger.info("Using evaluation database %s for ingestion", db_override)
+                else:
+                    logger.info("No database override detected; using default database")
+                ingestion_result, ingestion_doc_ids, ingestion_times = self._ingestion_runner.run(
+                    database_override=db_override
+                )
                 scenario_results[ingestion_result.name] = ingestion_result
                 self._perf_samples["ingestion_durations"] = ingestion_times
 
@@ -316,7 +325,25 @@ class Evaluator:
             artifacts=outcome.artifacts,
         )
 
+    def _ensure_judge_model_ready(self) -> None:
+        if self._judge_model_warmed:
+            return
+
+        model = settings.answer_judge_model
+        if not text_llm_client.ensure_client():
+            logger.warning("Unable to initialize Ollama client; skipping judge model warm-up")
+            return
+
+        logger.info("Warming answer judge model %s", model)
+        warmed = text_llm_client.warm_model(model=model, prompt="Warm-up ping", max_tokens=4)
+        if warmed:
+            self._judge_model_warmed = True
+            logger.info("Answer judge model %s warmed successfully", model)
+        else:
+            logger.warning("Answer judge model %s warm-up failed; continuing without preloading", model)
+
     def _run_answer_suite(self, query_artifacts: List[Dict[str, Any]]) -> ScenarioResult:
+        self._ensure_judge_model_ready()
         outcome = self._answer_runner.run(query_artifacts)
         return ScenarioResult(
             name="answers",

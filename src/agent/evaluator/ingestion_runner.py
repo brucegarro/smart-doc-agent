@@ -25,7 +25,7 @@ class IngestionScenarioRunner:
         self._config = config
         self._batch_runner = BatchIngestionRunner(processor)
 
-    def run(self) -> Tuple[ScenarioResult, List[str], List[float]]:
+    def run(self, database_override: Optional[str] = None) -> Tuple[ScenarioResult, List[str], List[float]]:
         docs = self._ingestion_fixtures()
         if not docs:
             logger.warning("No PDF fixtures found in %s; skipping ingestion", self._config.fixtures_docs)
@@ -41,10 +41,13 @@ class IngestionScenarioRunner:
             )
 
         logger.info("Ingestion scenario starting with %s document(s)", len(docs))
+        if database_override:
+            logger.info("Routing ingestion jobs to database %s", database_override)
         summary = self._batch_runner.enqueue(
             docs,
             source_name="eval-fixture",
             max_workers=max(1, len(docs)),
+            database_override=database_override,
         )
         job_results = self._batch_runner.wait_for_jobs(
             summary,

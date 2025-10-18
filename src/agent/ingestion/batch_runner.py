@@ -46,13 +46,19 @@ class BatchIngestionRunner:
         source_name: Optional[str] = None,
         parse_options: Optional[ParseOptions] = None,
         max_workers: int = 4,
+        database_override: Optional[str] = None,
     ) -> ParallelIngestSummary:
+        if database_override:
+            logger.info("Batch enqueue targeting database %s", database_override)
+        else:
+            logger.info("Batch enqueue using default database")
         effective_workers = max(1, max_workers)
         return self._processor.process_pdfs_parallel(
             pdf_paths,
             source_name=source_name,
             parse_options=parse_options,
             max_workers=effective_workers,
+            database_override=database_override,
         )
 
     def wait_for_jobs(

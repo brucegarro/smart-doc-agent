@@ -116,6 +116,7 @@ services:
     volumes:
       - ./src:/app:cached                      # dev bind mount for code
       - ./scripts:/app/scripts:cached          # dev bind mount for scripts
+      - ./sql:/app/sql:ro                      # share schema migration scripts
       - ./sample_papers:/app/sample_papers:cached  # sample papers for testing
       - data:/data                             # inputs/outputs
       - models:/root/.cache/huggingface        # share HF cache
@@ -176,6 +177,7 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     volumes:
       - ./src:/app:cached
+      - ./sql:/app/sql:ro
       - data:/data
       - models:/root/.cache/huggingface
       - models:/root/.paddleocr                # PaddleOCR model cache
@@ -230,6 +232,8 @@ services:
       EVAL_LOG_LEVEL: ${EVAL_LOG_LEVEL:-INFO}
       EVAL_APP_HEALTHCHECK_URL: ""
     volumes:
+      - ./src:/app:cached
+      - ./sql:/app/sql:ro
       - ./eval/fixtures:/eval/fixtures:ro
       - ./eval/results:/eval/results
       - data:/data

@@ -22,6 +22,7 @@ from agent.embedding import ChunkPayload, build_chunks, embedding_client
 from agent.db import get_db_connection
 from agent.ingestion.pdf_parser import ParseOptions, parse_pdf
 from agent.ingestion.udr import UnifiedDocumentRepresentation
+from agent.retrieval.document_catalog import invalidate_document_catalog_cache
 from agent.storage import s3_client
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,7 @@ class DocumentProcessor:
                 chunk_elapsed=chunk_elapsed,
                 chunk_stats=chunk_stats,
             )
+            invalidate_document_catalog_cache()
             logger.debug("Processed document id: %s", context.doc_id)
             return context.doc_id
         except Exception as exc:
@@ -195,6 +197,7 @@ class DocumentProcessor:
         source_name: Optional[str] = None,
         parse_options: Optional[ParseOptions] = None,
         max_workers: int = 4,
+        database_override: Optional[str] = None,
     ) -> ParallelIngestSummary:
         """Enqueue multiple PDFs for ingestion via Redis-backed worker queue."""
 
@@ -207,6 +210,20 @@ class DocumentProcessor:
 
         queue = self._get_ingest_queue()
         parse_payload = self._serialize_parse_options(parse_options or self.parse_options)
+        target_database = database_override or getattr(settings, "db_name", None)
+        if target_database:
+            logger.info(
+                "Queueing %s PDF(s) for ingestion via %s targeting database %s",
+                len(pdf_list),
+                queue.name,
+                target_database,
+            )
+        else:
+            logger.info(
+                "Queueing %s PDF(s) for ingestion via %s with default database",
+                len(pdf_list),
+                queue.name,
+            )
 
         start = time.perf_counter()
         outcomes: list[ParallelIngestOutcome] = []
@@ -257,8 +274,9 @@ class DocumentProcessor:
                 job = queue.enqueue(
                     "agent.ingestion.tasks.process_pdf_task",
                     str(staged_path),
-                    source_name,
-                    parse_payload,
+                    source_name=source_name,
+                    parse_options_payload=parse_payload,
+                    database_override=target_database,
                     job_timeout=max(900, 1800 * max_workers),
                     result_ttl=86400,
                     failure_ttl=86400,
@@ -481,6 +499,7 @@ class DocumentProcessor:
                 udr_json = json.loads(udr.model_dump_json())
                 
                 # Insert document
+                ingestion_time = datetime.now(timezone.utc)
                 cur.execute(
                     """
                     INSERT INTO documents (
@@ -492,11 +511,12 @@ class DocumentProcessor:
                         authors,
                         publication_year,
                         num_pages,
-                        udr_data,
-                        processing_status,
-                        processed_at
+                                udr_data,
+                                ingested_at,
+                                processing_status,
+                                processed_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -509,8 +529,9 @@ class DocumentProcessor:
                         udr.metadata.publication_year,
                         udr.metadata.num_pages,
                         json.dumps(udr_json),
+                        ingestion_time,
                         "ingested",
-                        datetime.now(timezone.utc)
+                        ingestion_time
                     )
                 )
                 

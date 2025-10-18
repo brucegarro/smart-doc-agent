@@ -13,7 +13,7 @@ import psycopg
 from psycopg import sql
 
 from agent.config import settings
-from agent.db import db
+from agent.db import db, switch_database
 
 from agent.evaluator.models import ScenarioResult
 
@@ -117,16 +117,10 @@ class DatabaseManager:
         return sanitized.rstrip("_") or f"{self._original_db_name}_eval"
 
     def _restore_original_database(self) -> None:
-        db.close()
-        object.__setattr__(settings, "db_name", self._original_db_name)
-        os.environ["DB_NAME"] = self._original_db_name
-        os.environ["DATABASE_URL"] = settings.database_url
+        switch_database(self._original_db_name)
 
     def _switch_database(self, db_name: str) -> None:
-        db.close()
-        object.__setattr__(settings, "db_name", db_name)
-        os.environ["DB_NAME"] = db_name
-        os.environ["DATABASE_URL"] = settings.database_url
+        switch_database(db_name)
 
     def _create_fresh_database(self, db_name: str) -> None:
         conninfo = self._build_conninfo(self._original_db_name)

@@ -9,8 +9,12 @@ from typing import Iterable, List, Optional, Sequence
 
 from agent.db import get_db_connection
 from agent.embedding.embedder import embedding_client
+from agent.retrieval.query_parser import QueryContext, build_query_context
 
 _whitespace_re = re.compile(r"\s+")
+
+
+DOCUMENT_FILTER_MIN_SCORE = 0.65
 
 
 @dataclass
@@ -56,6 +60,7 @@ def search_chunks(
     *,
     limit: int = 5,
     content_types: Optional[Iterable[str]] = ("text",),
+    query_context: Optional[QueryContext] = None,
 ) -> List[ChunkResult]:
     """Search for similar chunks given free-text query."""
 
@@ -64,6 +69,8 @@ def search_chunks(
     if limit <= 0:
         raise ValueError("Limit must be positive")
 
+    context = query_context or build_query_context(query)
+
     embeddings = embedding_client.embed([query])
     if not embeddings or not embeddings[0]:
         raise ValueError("Failed to generate embedding for query")
@@ -71,15 +78,24 @@ def search_chunks(
     vector = embeddings[0]
     vector_value = _vector_literal(vector)
 
-    filter_clause = ""
+    filter_clauses: List[str] = []
     params: List[object] = [vector_value]
+
+    document_ids = context.document_ids(min_score=DOCUMENT_FILTER_MIN_SCORE)
+    if document_ids:
+        filter_clauses.append("c.document_id = ANY(%s)")
+        params.append(document_ids)
 
     if content_types:
         types_list = list(content_types)
-        filter_clause = "WHERE c.content_type = ANY(%s)"
+        filter_clauses.append("c.content_type = ANY(%s)")
         params.append(types_list)
 
     params.append(limit)
+
+    filter_clause = ""
+    if filter_clauses:
+        filter_clause = "WHERE " + " AND ".join(filter_clauses)
 
     query_sql = f"""
         WITH query_vec AS (

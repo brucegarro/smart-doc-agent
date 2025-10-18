@@ -18,7 +18,8 @@ from rich.table import Table
 from agent.config import settings
 from agent.ingestion.batch_runner import BatchIngestionRunner, BatchJobResult
 from agent.ingestion.processor import ParallelIngestSummary, processor
-from agent.retrieval.search import search_chunks
+from agent.retrieval.query_parser import build_query_context, describe_candidates
+from agent.retrieval.search import DOCUMENT_FILTER_MIN_SCORE, search_chunks
 
 # Configure logging with Rich
 logging.basicConfig(
@@ -513,12 +514,18 @@ def search(
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
     logging.getLogger("agent.embedding.embedder").setLevel(logging.WARNING)
 
+    doc_candidates: list = []
+
     try:
+        context = build_query_context(query)
+        doc_candidates = context.top_documents(min_score=DOCUMENT_FILTER_MIN_SCORE, limit=3)
+
         content_types = None if include_tables else ("text",)
         results = search_chunks(
             query,
             limit=limit,
             content_types=content_types,
+            query_context=context,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -527,6 +534,10 @@ def search(
     if not results:
         console.print("[yellow]No matching chunks found[/yellow]")
         return
+
+    if doc_candidates:
+        summary = ", ".join(describe_candidates(doc_candidates))
+        console.print(f"[dim]Detected document focus:[/dim] {summary}\n")
 
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("#", justify="right", width=3)

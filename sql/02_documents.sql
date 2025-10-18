@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS documents (
     udr_data JSONB,
     
     -- Timestamps
+    ingested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     processed_at TIMESTAMP WITH TIME ZONE

@@ -1,6 +1,7 @@
 """Database connection management with connection pooling."""
 
 import logging
+import os
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -73,6 +74,20 @@ class DatabaseManager:
 
 # Global database manager instance
 db = DatabaseManager()
+
+
+def switch_database(db_name: str) -> None:
+    """Switch the active database and reset the connection pool."""
+
+    current = getattr(settings, "db_name", None)
+    if not db_name or db_name == current:
+        return
+
+    logger.info("Switching database connection to %s", db_name)
+    db.close()
+    object.__setattr__(settings, "db_name", db_name)
+    os.environ["DB_NAME"] = db_name
+    os.environ["DATABASE_URL"] = settings.database_url
 
 
 @contextmanager
