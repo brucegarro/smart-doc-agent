@@ -15,7 +15,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
-from agent.ingestion.processor import processor
+from agent.config import settings
+from agent.ingestion.processor import ParallelIngestSummary, processor
 from agent.retrieval.search import search_chunks
 
 # Configure logging with Rich
@@ -128,8 +129,25 @@ def _collect_pdf_files(path: Path, recursive: bool) -> list[Path]:
     raise typer.Exit(1)
 
 
-def _process_pdfs(pdf_files: list[Path], source: Optional[str], verbose: bool) -> dict[str, list[tuple[str, str]]]:
-    results = {"success": [], "failed": [], "skipped": []}
+def _process_pdfs(
+    pdf_files: list[Path],
+    source: Optional[str],
+    verbose: bool,
+    workers: int,
+) -> dict[str, list[tuple[str, str]]]:
+    results = {"success": [], "failed": [], "skipped": [], "queued": []}
+
+    if len(pdf_files) > 1 or workers > 1:
+        console.print(
+            "Enqueuing PDFs for background ingestion via Redis queue\n"
+        )
+        summary = processor.process_pdfs_parallel(
+            pdf_files,
+            source_name=source,
+            max_workers=workers,
+        )
+        _log_parallel_results(pdf_files, summary, results, verbose)
+        return results
 
     for idx, pdf_file in enumerate(pdf_files, start=1):
         console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
@@ -137,6 +155,35 @@ def _process_pdfs(pdf_files: list[Path], source: Optional[str], verbose: bool) -
         results[bucket].append(payload)
 
     return results
+
+
+def _log_parallel_results(
+    pdf_files: list[Path],
+    summary: ParallelIngestSummary,
+    results: dict[str, list[tuple[str, str]]],
+    verbose: bool,
+) -> None:
+    total = len(pdf_files)
+    queue_name = summary.queue_name or settings.redis_queue_ingest
+    console.print(f"Queue name: [cyan]{queue_name}[/cyan]")
+
+    for idx, outcome in enumerate(summary.items, start=1):
+        pdf_name = pdf_files[idx - 1].name
+        console.print(f"[{idx}/{total}] Processing: [cyan]{pdf_name}[/cyan]")
+
+        if outcome.status == "queued" and outcome.job_id:
+            console.print(f"  ↻ Enqueued job → [cyan]{outcome.job_id}[/cyan]\n")
+            results["queued"].append((pdf_name, outcome.job_id))
+        elif outcome.status == "skipped":
+            reason = outcome.message or "Skipped"
+            console.print(f"  ⊘ Skipped: [yellow]{reason}[/yellow]\n")
+            results["skipped"].append((pdf_name, reason))
+        else:
+            reason = outcome.message or "Unknown error"
+            console.print(f"  ✗ Failed: [red]{reason}[/red]\n")
+            if verbose:
+                logger.error("Processing failed for %s: %s", pdf_name, reason)
+            results["failed"].append((pdf_name, reason))
 
 
 def _handle_pdf_ingest(pdf_file: Path, source: Optional[str], verbose: bool) -> tuple[str, tuple[str, str]]:
@@ -158,9 +205,16 @@ def _handle_pdf_ingest(pdf_file: Path, source: Optional[str], verbose: bool) -> 
 
 def _print_ingest_summary(results: dict[str, list[tuple[str, str]]]) -> None:
     console.print("\n[bold]Summary[/bold]")
-    console.print(f"  ✓ Success: [green]{len(results['success'])}[/green]")
-    console.print(f"  ⊘ Skipped: [yellow]{len(results['skipped'])}[/yellow]")
-    console.print(f"  ✗ Failed:  [red]{len(results['failed'])}[/red]")
+    summary_rows = [
+        ("queued", "↻ Queued", "cyan"),
+        ("success", "✓ Success", "green"),
+        ("skipped", "⊘ Skipped", "yellow"),
+        ("failed", "✗ Failed", "red"),
+    ]
+
+    for key, label, color in summary_rows:
+        if key in results:
+            console.print(f"  {label}: [{color}]{len(results[key])}[/{color}]")
 
     if results["failed"]:
         console.print("\n[bold red]Failed documents:[/bold red]")
@@ -192,6 +246,13 @@ def ingest(
         "--verbose",
         "-v",
         help="Enable verbose logging"
+    ),
+    workers: int = typer.Option(
+        1,
+        "--workers",
+        "-w",
+        min=1,
+        help="Number of parallel workers to use"
     )
 ):
     """
@@ -202,7 +263,7 @@ def ingest(
     profiler = _start_profiler_if_enabled()
     previous_level = _set_verbose_logging(verbose)
     try:
-        _run_ingest_command(path, recursive, source, verbose)
+        _run_ingest_command(path, recursive, source, verbose, workers)
     finally:
         if profiler is not None:
             profiler.disable()
@@ -216,12 +277,13 @@ def _run_ingest_command(
     recursive: bool,
     source: Optional[str],
     verbose: bool,
+    workers: int,
 ) -> None:
     console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
     pdf_files = _collect_pdf_files(path, recursive)
     console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
 
-    results = _process_pdfs(pdf_files, source, verbose)
+    results = _process_pdfs(pdf_files, source, verbose, workers)
     _print_ingest_summary(results)
 
 

@@ -1,14 +1,19 @@
 """Document processing orchestrator for PDF ingestion pipeline."""
 
+import contextlib
 import hashlib
 import json
 import logging
+import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Optional, Tuple
 from uuid import uuid4
+
+from redis import Redis
+from rq import Queue
 
 from psycopg.types.json import Json
 
@@ -31,6 +36,46 @@ class IngestionContext:
     source_name: Optional[str]
 
 
+@dataclass
+class ParallelIngestOutcome:
+    """Represents the result of ingesting a single PDF."""
+
+    pdf_path: Path
+    status: Literal["queued", "skipped", "failed"]
+    job_id: Optional[str] = None
+    doc_id: Optional[str] = None
+    message: Optional[str] = None
+
+
+@dataclass
+class ParallelIngestSummary:
+    """Aggregated results from a parallel ingestion run."""
+
+    items: List[ParallelIngestOutcome]
+    elapsed: float
+    queue_name: Optional[str] = None
+
+    @property
+    def successes(self) -> List[ParallelIngestOutcome]:
+        return [item for item in self.items if item.status == "queued" and item.doc_id]
+
+    @property
+    def skipped(self) -> List[ParallelIngestOutcome]:
+        return [item for item in self.items if item.status == "skipped"]
+
+    @property
+    def failed(self) -> List[ParallelIngestOutcome]:
+        return [item for item in self.items if item.status == "failed"]
+
+    @property
+    def queued(self) -> List[ParallelIngestOutcome]:
+        return [item for item in self.items if item.status == "queued"]
+
+    @property
+    def total(self) -> int:
+        return len(self.items)
+
+
 class DocumentProcessor:
     """Orchestrates PDF ingestion: parse → store → database."""
     
@@ -42,6 +87,10 @@ class DocumentProcessor:
             self.parse_options = ParseOptions.fast_ingest()
         else:
             self.parse_options = ParseOptions()
+        self._redis_connection: Optional[Redis] = None
+        self._ingest_queue: Optional[Queue] = None
+        self.queue_staging_dir = Path(settings.ingest_queue_dir)
+        self.queue_staging_dir.mkdir(parents=True, exist_ok=True)
     
     def process_pdf(
         self,
@@ -138,6 +187,134 @@ class DocumentProcessor:
         except Exception as exc:
             self._handle_processing_failure(context.pdf_path, s3_key, exc)
             raise
+
+    def process_pdfs_parallel(
+        self,
+        pdf_paths: Iterable[Path | str],
+        *,
+        source_name: Optional[str] = None,
+        parse_options: Optional[ParseOptions] = None,
+        max_workers: int = 4,
+    ) -> ParallelIngestSummary:
+        """Enqueue multiple PDFs for ingestion via Redis-backed worker queue."""
+
+        pdf_list: List[Path] = [Path(p) for p in pdf_paths]
+        if not pdf_list:
+            return ParallelIngestSummary(items=[], elapsed=0.0, queue_name=self._get_ingest_queue().name)
+
+        if max_workers < 1:
+            raise ValueError("max_workers must be positive")
+
+        queue = self._get_ingest_queue()
+        parse_payload = self._serialize_parse_options(parse_options or self.parse_options)
+
+        start = time.perf_counter()
+        outcomes: list[ParallelIngestOutcome] = []
+
+        for raw_path in pdf_list:
+            try:
+                normalized = self._normalize_pdf_path(raw_path)
+            except FileNotFoundError as exc:
+                outcomes.append(
+                    ParallelIngestOutcome(pdf_path=Path(raw_path), status="failed", message=str(exc))
+                )
+                continue
+
+            try:
+                pdf_hash = self._calculate_hash(normalized)
+                if self._document_exists(pdf_hash):
+                    outcomes.append(
+                        ParallelIngestOutcome(
+                            pdf_path=normalized,
+                            status="skipped",
+                            message=f"Document already ingested (hash: {pdf_hash[:12]})",
+                        )
+                    )
+                    continue
+            except Exception as exc:  # pragma: no cover - defensive
+                outcomes.append(
+                    ParallelIngestOutcome(
+                        pdf_path=normalized,
+                        status="failed",
+                        message=f"Failed duplicate check: {exc}",
+                    )
+                )
+                continue
+
+            try:
+                staged_path = self._stage_pdf_for_queue(normalized)
+            except Exception as exc:
+                outcomes.append(
+                    ParallelIngestOutcome(
+                        pdf_path=normalized,
+                        status="failed",
+                        message=f"Failed to stage PDF: {exc}",
+                    )
+                )
+                continue
+
+            try:
+                job = queue.enqueue(
+                    "agent.ingestion.tasks.process_pdf_task",
+                    str(staged_path),
+                    source_name,
+                    parse_payload,
+                    job_timeout=max(900, 1800 * max_workers),
+                    result_ttl=86400,
+                    failure_ttl=86400,
+                    meta={
+                        "original_path": str(normalized),
+                        "source_name": source_name,
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - Redis failure
+                outcomes.append(
+                    ParallelIngestOutcome(
+                        pdf_path=normalized,
+                        status="failed",
+                        message=f"Queue enqueue error: {exc}",
+                    )
+                )
+                with contextlib.suppress(Exception):
+                    staged_path.unlink()
+                continue
+
+            outcomes.append(
+                ParallelIngestOutcome(
+                    pdf_path=normalized,
+                    status="queued",
+                    job_id=job.id,
+                    message="Enqueued for ingestion",
+                )
+            )
+
+        elapsed = time.perf_counter() - start
+        return ParallelIngestSummary(items=outcomes, elapsed=elapsed, queue_name=queue.name)
+
+    def _get_redis_connection(self) -> Redis:
+        if self._redis_connection is None:
+            self._redis_connection = Redis.from_url(settings.redis_url)
+        return self._redis_connection
+
+    def _get_ingest_queue(self) -> Queue:
+        if self._ingest_queue is None:
+            self._ingest_queue = Queue(
+                settings.redis_queue_ingest,
+                connection=self._get_redis_connection(),
+                default_timeout=3600,
+            )
+        return self._ingest_queue
+
+    def _serialize_parse_options(self, options: Optional[ParseOptions]) -> Optional[dict[str, bool]]:
+        if not options:
+            return None
+        return asdict(options)
+
+    def _stage_pdf_for_queue(self, pdf_path: Path) -> Path:
+        staged_name = f"{uuid4().hex}_{pdf_path.name}"
+        staged_path = self.queue_staging_dir / staged_name
+        shutil.copy2(pdf_path, staged_path)
+        return staged_path
 
     def _handle_processing_failure(
         self,

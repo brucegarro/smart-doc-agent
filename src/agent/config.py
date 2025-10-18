@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     # Application
     log_level: str = "INFO"
     ingestion_fast_mode: bool = True
+    ingest_queue_dir: Path = Field(default=Path("/data/ingest_queue"))
     
     @property
     def database_url(self) -> str:
