@@ -59,11 +59,26 @@ eval_results(id PK, document_id→documents, metric_name, metric_value,
 - `artifacts_index` keeps table/figure derivatives that we can surface in downstream UIs. Each entry points back to S3 for the rendered artifact and carries structured payloads (e.g., CSV-normalized tables).
 - `eval_results` records offline evaluation metrics. Jobs insert per-document scores with enough context (`dataset`, `model_name`, `table_reference`) to slice quality over time and reconcile with A/B test runs.
 
+## Development Challenges
+
+### Evaluation
+- I added the evaluation harness late in the project, something I wish I had done earlier, as I had been evaluating some fairly complex code with subjective, eyeball checks. For future projects, I’ll add an evaluation harness much earlier.
+- Once in place, I introduced metrics like a context LLM-judge score to assess response quality, along with runtime tracking for PDF parsing and code complexity metrics (using Radon). Tracking parsing time let me pinpoint performance issues quickly.
+- I ran into performance issues when running the judge LLM multiple times during testing, so I switched to a smaller model (Qwen2.5‑1.5B) to keep evaluation faster and more efficient.
+
+### Performance
+- Table and figure parsing turned out to be the slowest and most compute‑intensive stage of the parser (and possibly the entire app), so it’s run sparingly.
+- In future iterations, I’d separate text and vision tasks into different queues: run OCR and VLM work in a “slow” queue, while the faster text content—which makes up the majority of each document—processes first in a “fast” queue. This uses idle compute without slowing the initial user experience during uploads.
+- In a production setting, we could also scale out by adding more LLM endpoints and worker instances to handle heavier workloads.
+
+### Parsing tables and figures proved especially complex
+- Tables and figures come in all shapes and sizes, and their raw text often fails to capture the most meaningful context. Figures in particular are inconsistent—sometimes represented in the PDF like tables, other times as images. To address this, I introduced layout awareness that combines pdfplumber extraction with PaddleOCR layout detections, normalizes tables into grids, links captions, and optionally adds Qwen‑VL summaries. This system is still slow and I haven’t integrated it into the evaluation harness yet, so it needs more iteration.
+
 ## 3. Install & Run
 
 ### Requirements
 - Docker Desktop 4.28+ (or Docker Engine 24+ with Compose V2)
-- 16+ GB RAM recommended for simultanous Ollama + workers
+- 16+ GB RAM recommended for simultaneous Ollama + workers
 - Python 3.11 (optional) if you plan to run utility scripts locally
 
 ### Quickstart
