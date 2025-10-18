@@ -110,12 +110,16 @@ class EvaluatorConfig:
         answer_judge_pass_threshold = float(os.getenv("EVAL_ANSWER_JUDGE_PASS_THRESHOLD", "0.7"))
         answer_judge_pass_rate_threshold = float(os.getenv("EVAL_ANSWER_JUDGE_PASS_RATE_MIN", "0.6"))
 
+        # Support quick mode with smaller fixture sets for fast iteration
+        quick_mode = os.getenv("EVAL_QUICK_MODE", "false").lower() in ("true", "1", "yes")
+        suffix = "-quick" if quick_mode else ""
+
         return cls(
             fixtures_root=fixtures_root,
             fixtures_docs=fixtures_root / "docs",
-            fixtures_queries=fixtures_root / "queries.jsonl",
-            fixtures_fields=fixtures_root / "fields.jsonl",
-            fixtures_math=fixtures_root / "math.jsonl",
+            fixtures_queries=fixtures_root / f"queries{suffix}.jsonl",
+            fixtures_fields=fixtures_root / f"fields{suffix}.jsonl",
+            fixtures_math=fixtures_root / f"math{suffix}.jsonl",
             fixtures_quality=fixtures_root / "quality.json",
             results_root=results_root,
             run_id=run_id,

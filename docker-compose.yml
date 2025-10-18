@@ -230,6 +230,7 @@ services:
       EVAL_FIXTURES_DIR: /eval/fixtures
       EVAL_RESULTS_DIR: /eval/results
       EVAL_LOG_LEVEL: ${EVAL_LOG_LEVEL:-INFO}
+      EVAL_QUICK_MODE: ${EVAL_QUICK_MODE:-true}
       EVAL_APP_HEALTHCHECK_URL: ""
     volumes:
       - ./src:/app:cached
