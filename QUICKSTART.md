@@ -112,14 +112,7 @@ python -m agent.cli query "What is the conclusion of the paper?"
 python -m agent.cli list
 ```
 
-### Jupyter Notebook
-
-1. Open http://localhost:8888
-2. Navigate to `/work/` folder
-3. Create new notebook or open examples
-4. Source code is available at `/home/jovyan/src/` (read-only)
-
-### Python API (in notebook or script)
+### Python API
 
 ```python
 from agent.ingestion import DocumentProcessor
@@ -222,7 +215,6 @@ docker exec -it doc_db psql -U doc -d docdb
 ## Next Steps
 
 - Read the [Architecture Documentation](docs/architecture.md)
-- Explore [Example Notebooks](notebooks/examples/)
 - Check [API Reference](docs/api.md)
 - Review [Evaluation Metrics](docs/evaluation.md)
 

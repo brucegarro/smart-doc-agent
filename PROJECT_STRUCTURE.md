@@ -89,12 +89,6 @@ smart-doc-agent/
 │       ├── test_retrieval.py
 │       └── test_query.py
 │
-├── notebooks/                    # Jupyter notebooks (TO BE CREATED)
-│   ├── 01_exploration.ipynb     # Data exploration
-│   ├── 02_ingestion_demo.ipynb  # Ingestion pipeline demo
-│   ├── 03_query_demo.ipynb      # Query interface demo
-│   └── 04_evaluation.ipynb      # Metrics and evaluation
-│
 └── docs/                         # Documentation (TO BE CREATED)
     ├── architecture.md           # System architecture
     ├── api.md                    # API reference
@@ -122,7 +116,6 @@ smart-doc-agent/
 7. Build worker job handlers
 8. Develop query engine
 9. Create evaluation harness
-10. Write example notebooks
 
 ### 📦 Test Data Available
 - **30 research papers** in `sample_papers/`
@@ -132,10 +125,9 @@ smart-doc-agent/
 ## Development Workflow
 
 1. **Code in `src/`** - mounted as volume (hot reload)
-2. **Test in Jupyter** - notebooks for exploration
-3. **Run via CLI** - `docker exec -it doc_app python -m agent.cli`
-4. **Background jobs** - worker processes Redis queues
-5. **Evaluate** - metrics tracked in `eval_results` table
+2. **Run via CLI** - `docker exec -it doc_app python -m agent.cli`
+3. **Background jobs** - worker processes Redis queues
+4. **Evaluate** - metrics tracked in `eval_results` table
 
 ## Infrastructure Ready
 

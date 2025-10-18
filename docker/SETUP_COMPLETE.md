@@ -12,7 +12,6 @@ Successfully created a complete Docker-based infrastructure for the Smart Doc Ag
 4. **Ollama** - Local LLM/VLM server (Qwen models)
 5. **App** - CLI/API service (full-featured)
 6. **Worker** - Background processor (lean, optimized)
-7. **Jupyter** - Interactive notebook environment
 
 ### Files Created
 
@@ -62,7 +61,6 @@ Both images pre-download models during build:
 ### Development Features
 
 - ✅ Hot reload (code volume mounts)
-- ✅ No authentication on Jupyter (local dev)
 - ✅ All services health-checked
 - ✅ Shared model cache across containers
 - ✅ Persistent volumes for data

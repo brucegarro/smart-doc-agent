@@ -62,7 +62,7 @@ redis==5.0.1                 # Redis client
 rq==1.15.1                   # Redis Queue for background jobs
 
 # ------------------------------------------------------------------------------
-# CLI & UI
+# CLI
 # ------------------------------------------------------------------------------
 typer==0.9.0                 # Modern CLI framework
 rich==13.7.0                 # Beautiful terminal formatting

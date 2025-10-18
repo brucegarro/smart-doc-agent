@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from threading import Lock
 from typing import Any, List, Optional
 
@@ -11,9 +13,10 @@ from agent.config import settings
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
-    from ollama import Client as OllamaClient  # type: ignore
+    from ollama import Client as OllamaClient, ResponseError  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     OllamaClient = None  # type: ignore
+    ResponseError = None  # type: ignore
 
 
 class LLMGenerationError(RuntimeError):
@@ -44,10 +47,6 @@ class TextLLMClient:
         temperature: float = 0.2,
         max_tokens: int = 256,
     ) -> str:
-        client = self._get_client()
-        if client is None:
-            raise LLMGenerationError("text llm client unavailable")
-
         messages: List[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -58,16 +57,49 @@ class TextLLMClient:
             "num_predict": max(1, max_tokens),
         }
 
-        try:
-            response = client.chat(  # type: ignore[operator]
-                model=settings.text_llm_model,
-                messages=messages,
-                options=options,
-                stream=False,
-            )
-        except Exception as exc:  # pragma: no cover - network dependency
-            logger.error("Text LLM request failed: %s", exc)
-            raise LLMGenerationError(str(exc)) from exc
+        if "num_ctx" not in options:
+            try:
+                options["num_ctx"] = max(1, int(os.getenv("OLLAMA_CONTEXT_LENGTH", "4096")))
+            except ValueError:
+                options["num_ctx"] = 4096
+
+        response: Optional[dict[str, Any]] = None
+        last_error: Optional[Exception] = None
+
+        for attempt in range(2):
+            client = self._get_client()
+            if client is None:
+                break
+            try:
+                response = client.chat(  # type: ignore[operator]
+                    model=settings.text_llm_model,
+                    messages=messages,
+                    options=options,
+                    stream=False,
+                )
+                break
+            except Exception as exc:  # pragma: no cover - network dependency
+                last_error = exc
+                if ResponseError is not None and isinstance(exc, ResponseError):
+                    status_code = getattr(exc, "status_code", None)
+                    logger.error(
+                        "Text LLM request failed (status %s, attempt %s): %s",
+                        status_code,
+                        attempt + 1,
+                        exc,
+                    )
+                    if attempt == 0 and status_code is not None and status_code >= 500:
+                        self._reset_client()
+                        time.sleep(0.5)
+                        continue
+                else:
+                    logger.error("Text LLM request failed (attempt %s): %s", attempt + 1, exc)
+                raise LLMGenerationError(str(exc)) from exc
+
+        if response is None:
+            if last_error is not None:
+                raise LLMGenerationError(str(last_error)) from last_error
+            raise LLMGenerationError("text llm client unavailable")
 
         message = response.get("message") if isinstance(response, dict) else None
         if not message:
@@ -100,6 +132,18 @@ class TextLLMClient:
                 self._client = None
                 self._unavailable = True
         return self._client
+
+    def _reset_client(self) -> None:
+        with self._lock:
+            if self._client is not None:
+                close = getattr(self._client, "close", None)
+                if callable(close):  # pragma: no cover - optional cleanup
+                    try:
+                        close()
+                    except Exception:
+                        logger.debug("Error while closing Ollama client", exc_info=True)
+            self._client = None
+            self._unavailable = False
 
 
 text_llm_client = TextLLMClient()

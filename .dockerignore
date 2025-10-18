@@ -56,10 +56,6 @@ models/
 *.db
 *.sqlite
 
-# Jupyter
-.ipynb_checkpoints
-notebooks/
-
 # Environment
 .env
 .env.local
