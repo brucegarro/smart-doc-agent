@@ -1,0 +1,845 @@
+{
+  "env": {
+    "answer_context_limit": 3,
+    "answer_improvement_margin": 0.05,
+    "answer_improvement_rate_threshold": 0.5,
+    "answer_max_tokens": 256,
+    "answer_similarity_threshold": 0.55,
+    "answer_temperature": 0.2,
+    "code_quality_paths": [
+      "src",
+      "agent"
+    ],
+    "complexity_average_threshold": 5.0,
+    "complexity_function_threshold": 10.0,
+    "embedder_model": "BAAI/bge-small-en-v1.5",
+    "git_sha": "unknown",
+    "ingest_time_per_page_budget_sec": 5.0,
+    "maintainability_threshold": 65.0,
+    "retrieval_k": 5,
+    "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+    "vlm_model": "qwen2-vl:7b-instruct-q4_K_M"
+  },
+  "gates": {
+    "all": false,
+    "answers": false,
+    "boot": true,
+    "code_quality": false,
+    "extraction": true,
+    "ingestion": true,
+    "math": true,
+    "perf": true,
+    "queries": false
+  },
+  "metrics": {
+    "overall_score": 0.4,
+    "runtime_seconds": 108.21183681488037
+  },
+  "run_id": "20251018-010342-unknown",
+  "scenarios": {
+    "answers": {
+      "artifacts": {
+        "evaluations": [
+          {
+            "baseline_answer": "I don't know. The provided context is insufficient to answer the question about the specific architecture introduced in the research paper.",
+            "baseline_latency_ms": 5885.92733599944,
+            "baseline_similarity": 0.25,
+            "context_snippets": [
+              "Appendix Variant of the Inception Model Used Figure 5 documents the changes that were performed compared to the architecture with respect to the GoogleNet archictecture. For the interpretation of t...",
+              "14 \u00d7 14 \u00d7 1024 3 0 128 192 192 256 max + pass through inception (5a) 7 \u00d7 7 \u00d7 1024 3 352 192 320 160 224 avg + 128 inception (5b) 7 \u00d7 7 \u00d7 1024 3 352 192 320 192 224 max + 128 avg pool 7 \u00d7 7 / 1 1 \u00d7...",
+              "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Ne..."
+            ],
+            "contextual_answer": "The paper introduces an Appendix Variant of the Inception Model, which includes changes documented in Figure 5 compared to the GoogleNet architecture.",
+            "contextual_latency_ms": 6888.3030040015,
+            "contextual_similarity": 0.4541832669322709,
+            "gold_answer": "The paper introduces the Transformer, a sequence transduction model built entirely on self-attention.",
+            "id": "attn-arch",
+            "improvement": 0.2041832669322709,
+            "missing_context": false,
+            "query": "What architecture does the paper introduce?"
+          },
+          {
+            "baseline_answer": "I don't know. The number of layers in a Transformer encoder can vary depending on the specific implementation and research paper, and no context was provided to determine this.",
+            "baseline_latency_ms": 3424.2763350048335,
+            "baseline_similarity": 0.25,
+            "context_snippets": [
+              "Figure 1: The Transformer - model architecture. The Transformer follows this overall architecture using stacked self-attention and point-wise, fully connected layers for both the encoder and decode...",
+              "Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position- wise...",
+              "Most competitive neural sequence transduction models have an encoder-decoder structure [ 5 , 2 , 35 ]. Here, the encoder maps an input sequence of symbol representations ( x 1 , ..., x n ) to a seq..."
+            ],
+            "contextual_answer": "The encoder is composed of a stack of N = 6 identical layers.",
+            "contextual_latency_ms": 5301.932169008069,
+            "contextual_similarity": 0.7722772277227723,
+            "gold_answer": "The encoder uses N = 6 identical layers.",
+            "id": "encoder-depth",
+            "improvement": 0.5222772277227723,
+            "missing_context": false,
+            "query": "How many layers are stacked in the Transformer encoder?"
+          },
+          {
+            "baseline_answer": "I don't know. The specific details about how multi-head attention is used in the Transformer model were not provided in the context, and I do not have that information readily available without a reference to the relevant research paper.",
+            "baseline_latency_ms": 5402.976751996903,
+            "baseline_similarity": 0.314540059347181,
+            "context_snippets": [
+              "Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. With a single attention head, averaging inhibits this. MultiHe...",
+              "Decoder: The decoder is also composed of a stack of N = 6 identical layers. In addition to the two sub-layers in each encoder layer, the decoder inserts a third sub-layer, which performs multi-head...",
+              "Figure 2: (left) Scaled Dot-Product Attention. (right) Multi-Head Attention consists of several attention layers running in parallel. of the values, where the weight assigned to each value is compu..."
+            ],
+            "contextual_answer": "Multi-head attention in the Transformer model is used for jointly attending to information from different representation subspaces at different positions, performing multiple attention layers running in parallel, and inserting a third sub-layer into the decoder layer.",
+            "contextual_latency_ms": 7514.233087000321,
+            "contextual_similarity": 0.33695652173913043,
+            "gold_answer": "It is used for encoder-decoder attention, encoder self-attention, and masked decoder self-attention.",
+            "id": "multihead-uses",
+            "improvement": 0.022416462391949443,
+            "missing_context": false,
+            "query": "List the three ways multi-head attention is used in the Transformer."
+          },
+          {
+            "baseline_answer": "Batch normalization seeks to reduce internal covariate shift in neural networks by normalizing the input layer's activations. This helps in accelerating training and improving generalization.",
+            "baseline_latency_ms": 3432.8016270010266,
+            "baseline_similarity": 0.4732824427480916,
+            "context_snippets": [
+              "In traditional deep networks, too-high learning rate may result in the gradients that explode or vanish, as well as getting stuck in poor local minima. Batch Normaliza- tion helps address these iss...",
+              "Interestingly, our method bears similarity to the stan- dardization layer of (G\u00a8ulc\u00b8ehre & Bengio, 2013), though the two methods stem from very different goals, and per- form different tasks. The g...",
+              "Simply adding Batch Normalization to a network does not take full advantage of our method. To do so, we further changed the network and its training parameters, as fol- lows: Increase learning rate..."
+            ],
+            "contextual_answer": "Batch normalization seeks to reduce issues such as gradients exploding or vanishing and getting stuck in poor local minima, which can occur with traditional deep networks.",
+            "contextual_latency_ms": 5751.819794008043,
+            "contextual_similarity": 0.21487603305785125,
+            "gold_answer": "It reduces internal covariate shift by normalizing each layer's inputs.",
+            "id": "bn-internal-shift",
+            "improvement": -0.25840640969024037,
+            "missing_context": false,
+            "query": "What phenomenon does batch normalization seek to reduce?"
+          },
+          {
+            "baseline_answer": "I don't know. The specific ImageNet test error rate for a residual net ensemble is not provided in the given context, and without additional information from the paper or source, I cannot determine this value with certainty.",
+            "baseline_latency_ms": 6076.482212010887,
+            "baseline_similarity": 0.17993079584775087,
+            "context_snippets": [
+              "VGG [41] (ILSVRC\u201914) 7.32 GoogLeNet [44] (ILSVRC\u201914) 6.66 VGG [41] (v5) 6.8 PReLU-net [13] 4.94 BN-inception [16] 4.82 ResNet (ILSVRC\u201915) 3.57 Table 5. Error rates (%) of ensembles . The top-5 erro...",
+              "Table 2. Top-1 error (%, 10-crop testing) on ImageNet validation. Here the ResNets have no extra parameter compared to their plain counterparts. Fig. 4 shows the training procedures. 34-layer plain...",
+              "We evaluate our method on the ImageNet 2012 classi\ufb01- cation dataset [36] that consists of 1000 classes. The models are trained on the 1.28 million training images, and evalu- ated on the 50k valida..."
+            ],
+            "contextual_answer": "I don't know. The provided context does not specify the exact top-5 error rate for the ResNet ensemble on ImageNet; it only mentions that ResNets have comparable parameters to their plain counterparts and shows training procedures, but no specific error rates are given in these snippets.",
+            "contextual_latency_ms": 11000.127088002046,
+            "contextual_similarity": 0.24929178470254956,
+            "gold_answer": "The ensemble reaches a 3.57% error rate on the ImageNet test set.",
+            "id": "resnet-imagenet-error",
+            "improvement": 0.06936098885479869,
+            "missing_context": false,
+            "query": "What ImageNet test error does the residual net ensemble achieve?"
+          },
+          {
+            "baseline_answer": "I don't know. The acronym BERT is not defined in the provided context, and without additional information, I cannot determine its meaning with certainty.",
+            "baseline_latency_ms": 3799.246127004153,
+            "baseline_similarity": 0.31390134529147984,
+            "context_snippets": [
+              "We organize the appendix into three sections: \u2022 Additional implementation details for BERT are presented in Appendix A ; \u2022 Additional details for our experiments are presented in Appendix B ; and \u2022...",
+              "Ours BERT LARGE (Single) 78.7 81.9 80.0 83.1 Table 3: SQuAD 2.0 results. We exclude entries that use BERT as one of their components. tuning data, we only lose 0.1-0.4 F1, still outper- forming all...",
+              "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding Jacob Devlin Ming-Wei Chang Kenton Lee Kristina Toutanova Google AI Language { jacobdevlin,mingweichang,kentonl,kris..."
+            ],
+            "contextual_answer": "BERT stands for \"Bidirectional Encoder Representations from Transformers.\"",
+            "contextual_latency_ms": 4726.849251994281,
+            "contextual_similarity": 0.9583333333333334,
+            "gold_answer": "It stands for Bidirectional Encoder Representations from Transformers.",
+            "id": "bert-acronym",
+            "improvement": 0.6444319880418535,
+            "missing_context": false,
+            "query": "What does the acronym BERT stand for?"
+          },
+          {
+            "baseline_answer": "I don't know. The specific module added by DeepLabv3+ for improving segmentation boundaries is not provided in the given context, and my prior knowledge does not specify this detail accurately without additional information.",
+            "baseline_latency_ms": 4959.6656689973315,
+            "baseline_similarity": 0.2838283828382838,
+            "context_snippets": [
+              "We de\ufb01ne \u201cDeepLabv3 feature map\u201d as the last feature map computed by DeepLabv3 ( i.e ., the features containing ASPP features and image-level fea- tures), and [ k \u00d7 k, f ] as a convolution operatio...",
+              "We de\ufb01ne \u201cDeepLabv3 feature map\u201d as the last feature map computed by DeepLabv3 ( i.e ., the features containing ASPP features and image-level fea- tures), and [ k \u00d7 k, f ] as a convolution operatio...",
+              "4 L.-C Chen, Y. Zhu, G. Papandreou, F. Schro\ufb00, and H. Adam 1x1 Conv 3x3 Conv rate 6 3x3 Conv rate 12 3x3 Conv rate 18 Image Pooling 1x1 Conv 1x1 Conv Low-Level Features Upsample by 4 Concat 3x3 Con..."
+            ],
+            "contextual_answer": "I don't know. The provided context does not specify any additional modules added by DeepLabv3+ for improving segmentation boundaries beyond the definition of \"DeepLabv3 feature map.\"",
+            "contextual_latency_ms": 8202.906920996611,
+            "contextual_similarity": 0.3218390804597701,
+            "gold_answer": "It adds a decoder module that refines the segmentation along object boundaries.",
+            "id": "deeplab-decoder",
+            "improvement": 0.03801069762148629,
+            "missing_context": false,
+            "query": "What module does DeepLabv3+ add to improve segmentation boundaries?"
+          }
+        ]
+      },
+      "details": [
+        "avg similarity with context 0.473< 0.55",
+        "context degraded answers for 14.3% of evaluated queries"
+      ],
+      "duration_seconds": 82.37141508000786,
+      "metrics": {
+        "baseline_latency_ms_avg": 4711.625151144939,
+        "baseline_similarity_all": [
+          0.25,
+          0.25,
+          0.314540059347181,
+          0.4732824427480916,
+          0.17993079584775087,
+          0.31390134529147984,
+          0.2838283828382838
+        ],
+        "baseline_similarity_avg": 0.2950690037246839,
+        "context_latency_ms_avg": 7055.167330715839,
+        "context_similarity_all": [
+          0.4541832669322709,
+          0.7722772277227723,
+          0.33695652173913043,
+          0.21487603305785125,
+          0.24929178470254956,
+          0.9583333333333334,
+          0.3218390804597701
+        ],
+        "context_similarity_avg": 0.47253674970681114,
+        "evaluations": 7,
+        "fixtures_evaluated": 7,
+        "fixtures_total": 7,
+        "generation_failures": 0,
+        "improvements_all": [
+          0.2041832669322709,
+          0.5222772277227723,
+          0.022416462391949443,
+          -0.25840640969024037,
+          0.06936098885479869,
+          0.6444319880418535,
+          0.03801069762148629
+        ],
+        "mean_improvement": 0.17746774598212722,
+        "missing_context": 0,
+        "negative_improvement_rate": 0.14285714285714285,
+        "positive_improvement_rate": 0.5714285714285714
+      },
+      "status": "failed"
+    },
+    "boot": {
+      "artifacts": {
+        "checks": [
+          {
+            "detail": "postgres ready",
+            "latency_seconds": 0.0050542079989099875,
+            "name": "postgres",
+            "status": "passed"
+          },
+          {
+            "detail": "minio ready (200)",
+            "latency_seconds": 0.012237666989676654,
+            "name": "minio",
+            "status": "passed"
+          },
+          {
+            "detail": "ollama ready (200)",
+            "latency_seconds": 0.011987582998699509,
+            "name": "ollama",
+            "status": "passed"
+          },
+          {
+            "detail": "redis ready",
+            "latency_seconds": 0.0007206250011222437,
+            "name": "redis",
+            "status": "passed"
+          },
+          {
+            "detail": "app healthcheck disabled",
+            "latency_seconds": 5.041001713834703e-06,
+            "name": "app",
+            "status": "warn"
+          },
+          {
+            "detail": "worker assumed ready",
+            "latency_seconds": 0.0006089170055929571,
+            "name": "worker",
+            "status": "passed"
+          }
+        ]
+      },
+      "details": [
+        "postgres:passed",
+        "minio:passed",
+        "ollama:passed",
+        "redis:passed",
+        "app:warn",
+        "worker:passed"
+      ],
+      "duration_seconds": 0.030875542011926882,
+      "metrics": {
+        "services_checked": 6,
+        "services_failed": 0,
+        "services_passed": 5,
+        "services_warn": 1
+      },
+      "status": "warn"
+    },
+    "code_quality": {
+      "artifacts": {
+        "analysis_errors": [],
+        "complexity_violations": [
+          {
+            "complexity": 16,
+            "lineno": 181,
+            "name": "_evaluate_record",
+            "path": "src/agent/evaluator/answer_runner.py",
+            "rank": "C"
+          },
+          {
+            "complexity": 14,
+            "lineno": 404,
+            "name": "_build_scorecard",
+            "path": "src/agent/evaluator/harness.py",
+            "rank": "C"
+          },
+          {
+            "complexity": 16,
+            "lineno": 181,
+            "name": "_evaluate_record",
+            "path": "agent/evaluator/answer_runner.py",
+            "rank": "C"
+          },
+          {
+            "complexity": 14,
+            "lineno": 404,
+            "name": "_build_scorecard",
+            "path": "agent/evaluator/harness.py",
+            "rank": "C"
+          }
+        ],
+        "ignore_patterns": [],
+        "maintainability_violations": [
+          {
+            "maintainability_index": 39.170992939717706,
+            "path": "src/agent/cli.py"
+          },
+          {
+            "maintainability_index": 36.559662860009716,
+            "path": "src/agent/embedding/chunker.py"
+          },
+          {
+            "maintainability_index": 29.613994375969135,
+            "path": "src/agent/embedding/text_chunks.py"
+          },
+          {
+            "maintainability_index": 56.64848912582871,
+            "path": "src/agent/embedding/embedder.py"
+          },
+          {
+            "maintainability_index": 0.0,
+            "path": "src/agent/ingestion/pdf_parser.py"
+          },
+          {
+            "maintainability_index": 35.51608965022966,
+            "path": "src/agent/ingestion/processor.py"
+          },
+          {
+            "maintainability_index": 60.0556483108261,
+            "path": "src/agent/llm/text_client.py"
+          },
+          {
+            "maintainability_index": 47.45708282175257,
+            "path": "src/agent/retrieval/search.py"
+          },
+          {
+            "maintainability_index": 42.21772548532668,
+            "path": "src/agent/evaluator/ingestion_runner.py"
+          },
+          {
+            "maintainability_index": 15.467695080072657,
+            "path": "src/agent/evaluator/answer_runner.py"
+          },
+          {
+            "maintainability_index": 14.69151666581404,
+            "path": "src/agent/evaluator/harness.py"
+          },
+          {
+            "maintainability_index": 45.176284873228674,
+            "path": "src/agent/evaluator/db_manager.py"
+          },
+          {
+            "maintainability_index": 15.173953755374702,
+            "path": "src/agent/evaluator/query_runner.py"
+          },
+          {
+            "maintainability_index": 33.978640516322386,
+            "path": "src/agent/evaluator/quality_runner.py"
+          },
+          {
+            "maintainability_index": 41.68446598399901,
+            "path": "src/agent/evaluator/boot_runner.py"
+          },
+          {
+            "maintainability_index": 39.170992939717706,
+            "path": "agent/cli.py"
+          },
+          {
+            "maintainability_index": 36.559662860009716,
+            "path": "agent/embedding/chunker.py"
+          },
+          {
+            "maintainability_index": 29.613994375969135,
+            "path": "agent/embedding/text_chunks.py"
+          },
+          {
+            "maintainability_index": 56.64848912582871,
+            "path": "agent/embedding/embedder.py"
+          },
+          {
+            "maintainability_index": 0.0,
+            "path": "agent/ingestion/pdf_parser.py"
+          },
+          {
+            "maintainability_index": 35.51608965022966,
+            "path": "agent/ingestion/processor.py"
+          },
+          {
+            "maintainability_index": 60.0556483108261,
+            "path": "agent/llm/text_client.py"
+          },
+          {
+            "maintainability_index": 47.45708282175257,
+            "path": "agent/retrieval/search.py"
+          },
+          {
+            "maintainability_index": 42.21772548532668,
+            "path": "agent/evaluator/ingestion_runner.py"
+          },
+          {
+            "maintainability_index": 15.467695080072657,
+            "path": "agent/evaluator/answer_runner.py"
+          },
+          {
+            "maintainability_index": 14.69151666581404,
+            "path": "agent/evaluator/harness.py"
+          },
+          {
+            "maintainability_index": 45.176284873228674,
+            "path": "agent/evaluator/db_manager.py"
+          },
+          {
+            "maintainability_index": 15.173953755374702,
+            "path": "agent/evaluator/query_runner.py"
+          },
+          {
+            "maintainability_index": 33.978640516322386,
+            "path": "agent/evaluator/quality_runner.py"
+          },
+          {
+            "maintainability_index": 41.68446598399901,
+            "path": "agent/evaluator/boot_runner.py"
+          }
+        ],
+        "missing_paths": []
+      },
+      "details": [
+        "average cyclomatic complexity 3.61 exceeds threshold 3.60",
+        "average maintainability index 61.88 below threshold 62.00"
+      ],
+      "duration_seconds": 0.3984465000103228,
+      "metrics": {
+        "blocks_analyzed": 728,
+        "cyclomatic_complexity_avg": 3.61,
+        "cyclomatic_complexity_max": 16,
+        "cyclomatic_complexity_rank": "C",
+        "files_analyzed": 56,
+        "maintainability_index_avg": 61.88,
+        "maintainability_index_min": 0.0,
+        "threshold_average": 3.6,
+        "threshold_function": 12.0,
+        "threshold_maintainability": 62.0
+      },
+      "status": "failed"
+    },
+    "db_setup": {
+      "artifacts": {},
+      "details": [
+        "created:docdb_eval_20251018_010342_unknown"
+      ],
+      "duration_seconds": 0.061388207992422394,
+      "metrics": {
+        "database": "docdb_eval_20251018_010342_unknown"
+      },
+      "status": "passed"
+    },
+    "extraction": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "fields": {
+              "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over existing best results, including ensembles, by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data.",
+              "authors": [
+                "Ashish Vaswani",
+                "Noam Shazeer",
+                "Niki Parmar",
+                "Jakob Uszkoreit",
+                "Llion Jones",
+                "Aidan N. Gomez",
+                "Lukasz Kaiser",
+                "Illia Polosukhin"
+              ],
+              "title": "Attention Is All You Need"
+            }
+          },
+          {
+            "document_id": "doc_batch_normalization",
+            "fields": {
+              "abstract": "Training deep neural networks is complicated by the fact that the distribution of each layer's inputs changes during training, as the parameters of the previous layers change. This slows down the training by requiring lower learning rates and careful parameter initialization, and makes it notoriously hard to train models with saturating nonlinearities. We refer to this phenomenon as internal covariate shift, and address the problem by normalizing layer inputs. Our method draws its strength from making normalization a part of the model architecture and performing the normalization for each training mini-batch. Batch Normalization allows us to use much higher learning rates and be less careful about initialization. It also acts as a regularizer, in some cases eliminating the need for Dropout. Applied to a state-of-the-art image classification model, Batch Normalization achieves the same accuracy with 14 times fewer training steps, and beats the original model by a significant margin.",
+              "authors": [
+                "Sergey Ioffe",
+                "Christian Szegedy"
+              ],
+              "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"
+            }
+          },
+          {
+            "document_id": "doc_deep_residual_learning",
+            "fields": {
+              "abstract": "Deeper neural networks are more difficult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those used previously. We explicitly reformulate the layers as learning residual functions with reference to the layer inputs, instead of learning unreferenced functions. We provide comprehensive empirical evidence showing that these residual networks are easier to optimize, and can gain accuracy from considerably increased depth. On the ImageNet dataset we evaluate residual nets with a depth of up to 152 layers, 8x deeper than VGG nets but still having lower complexity. An ensemble of these residual nets achieves 3.57% error on the ImageNet test set. This result won the 1st place on the ILSVRC 2015 classification task. We also present analysis on CIFAR-10 with 100 and 1000 layers.",
+              "authors": [
+                "Kaiming He",
+                "Xiangyu Zhang",
+                "Shaoqing Ren",
+                "Jian Sun"
+              ],
+              "title": "Deep Residual Learning for Image Recognition"
+            }
+          }
+        ]
+      },
+      "details": [
+        "extraction scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 5
+      },
+      "status": "warn"
+    },
+    "ingestion": {
+      "artifacts": {
+        "documents": [
+          "24e441e8-91de-4805-b9aa-d41360c183ce",
+          "a15ea467-72fc-4267-93dd-e4646e7c841e",
+          "efe5e7ae-be08-4441-97b3-2ae6b0e2aa21",
+          "d724bf55-2a60-4bc8-9836-5969c5c47f00",
+          "c3866f7d-7269-43d5-9b1f-2b4eebe7b7cb"
+        ]
+      },
+      "details": [
+        "ingested:24e441e8-91de-4805-b9aa-d41360c183ce",
+        "ingested:a15ea467-72fc-4267-93dd-e4646e7c841e",
+        "ingested:efe5e7ae-be08-4441-97b3-2ae6b0e2aa21",
+        "ingested:d724bf55-2a60-4bc8-9836-5969c5c47f00",
+        "ingested:c3866f7d-7269-43d5-9b1f-2b4eebe7b7cb"
+      ],
+      "duration_seconds": 25.10586817699368,
+      "metrics": {
+        "avg_time_per_doc_sec": 5.021173635398736,
+        "document_ids": [
+          "24e441e8-91de-4805-b9aa-d41360c183ce",
+          "a15ea467-72fc-4267-93dd-e4646e7c841e",
+          "efe5e7ae-be08-4441-97b3-2ae6b0e2aa21",
+          "d724bf55-2a60-4bc8-9836-5969c5c47f00",
+          "c3866f7d-7269-43d5-9b1f-2b4eebe7b7cb"
+        ],
+        "documents_attempted": 5,
+        "documents_failed": 0,
+        "documents_ingested": 5,
+        "durations_sec": [
+          5.47626737698738,
+          4.15711716900114,
+          4.74146537699562,
+          6.079454919003183,
+          4.651563335006358
+        ],
+        "ingest_time_per_page_sec": 0.34869261356935666,
+        "total_pages": 72,
+        "total_time_sec": 25.10586817699368
+      },
+      "status": "passed"
+    },
+    "math": {
+      "artifacts": {
+        "fixtures": [
+          {
+            "document_id": "3061ea24-ee4b-4cff-be26-846865e76b4a",
+            "id": "scaled-attention",
+            "latex_gold": "\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V",
+            "notes": "Scaled dot-product attention from Section 3.2."
+          }
+        ]
+      },
+      "details": [
+        "math scoring not implemented"
+      ],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "fixtures_total": 1
+      },
+      "status": "warn"
+    },
+    "perf": {
+      "artifacts": {},
+      "details": [],
+      "duration_seconds": 0.0,
+      "metrics": {
+        "ingestion_avg_time_sec": 5.021173635398736,
+        "ingestion_total_time_sec": 25.10586817699368,
+        "query_p50_ms": 24.627499995403923,
+        "query_p95_ms": 33.611687700613395
+      },
+      "status": "passed"
+    },
+    "queries": {
+      "artifacts": {
+        "queries": [
+          {
+            "hit_at_k": 0.0,
+            "id": "attn-arch",
+            "latency_ms": 36.45374999905471,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.8350292390969749,
+            "query": "What architecture does the paper introduce?",
+            "retrieved_fingerprints": [
+              "cf7fcb7735b6c9f9db83de0a",
+              "8d86e55903f99e37df417727",
+              "ce49822ce8f3769d9c39f86c",
+              "99f28cd92a139eada1660f11",
+              "452b14745170df225c4b123b"
+            ],
+            "retrieved_snippets": [
+              "Appendix Variant of the Inception Model Used Figure 5 documents the changes that were performed compared to the architecture with respect to the GoogleNet archictecture. For the interpretation of t...",
+              "14 \u00d7 14 \u00d7 1024 3 0 128 192 192 256 max + pass through inception (5a) 7 \u00d7 7 \u00d7 1024 3 352 192 320 160 224 avg + 128 inception (5b) 7 \u00d7 7 \u00d7 1024 3 352 192 320 192 224 max + 128 avg pool 7 \u00d7 7 / 1 1 \u00d7...",
+              "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Ne...",
+              "\uf8f0 1 \u00d7 1, 256 3 \u00d7 3, 256 1 \u00d7 1, 1024 \uf8f9 \uf8fb \u00d7 23 \uf8ee \uf8f0 1 \u00d7 1, 256 3 \u00d7 3, 256 1 \u00d7 1, 1024 \uf8f9 \uf8fb \u00d7 36 conv5 x 7 \u00d7 7 \ufffd 3 \u00d7 3, 512 3 \u00d7 3, 512 \ufffd \u00d7 2 \ufffd 3 \u00d7 3, 512 3 \u00d7 3, 512 \ufffd \u00d7 3 \uf8ee \uf8f0 1 \u00d7 1, 512 3 \u00d7 3, 512 1 \u00d7 1...",
+              "Model Architecture BERT\u2019s model architec- ture is a multi-layer bidirectional Transformer en- coder based on the original implementation de- scribed in Vaswani et al. ( 2017 ) and released in the t..."
+            ],
+            "similarity_scores": [
+              0.0783289817232376,
+              0.16120906801007556,
+              0.2230971128608924,
+              0.14300736067297581,
+              0.11225806451612903
+            ],
+            "top_similarity": 0.2230971128608924
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "encoder-depth",
+            "latency_ms": 26.980209004250355,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9917893032737543,
+            "query": "How many layers are stacked in the Transformer encoder?",
+            "retrieved_fingerprints": [
+              "d6dc65fdefee7bb585aa29ac",
+              "6c630f3becee38dac0f71091",
+              "73b99b6d7996a29ff70d18e7",
+              "674313ba419748feddb90a06",
+              "9966ba8cbd02c5a7efb8a6ac"
+            ],
+            "retrieved_snippets": [
+              "Figure 1: The Transformer - model architecture. The Transformer follows this overall architecture using stacked self-attention and point-wise, fully connected layers for both the encoder and decode...",
+              "Encoder: The encoder is composed of a stack of N = 6 identical layers. Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position- wise...",
+              "Most competitive neural sequence transduction models have an encoder-decoder structure [ 5 , 2 , 35 ]. Here, the encoder maps an input sequence of symbol representations ( x 1 , ..., x n ) to a seq...",
+              "Decoder: The decoder is also composed of a stack of N = 6 identical layers. In addition to the two sub-layers in each encoder layer, the decoder inserts a third sub-layer, which performs multi-head...",
+              "In this work we propose the Transformer, a model architecture eschewing recurrence and instead relying entirely on an attention mechanism to draw global dependencies between input and output. The T..."
+            ],
+            "similarity_scores": [
+              0.11871227364185111,
+              0.08416547788873038,
+              0.10035005834305717,
+              0.08807896735003796,
+              0.07447633824670287
+            ],
+            "top_similarity": 0.11871227364185111
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "multihead-uses",
+            "latency_ms": 26.388166996184736,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9954697773600235,
+            "query": "List the three ways multi-head attention is used in the Transformer.",
+            "retrieved_fingerprints": [
+              "6238df9e872d44432f46741e",
+              "674313ba419748feddb90a06",
+              "c589795870462dbe067be80b",
+              "7a47ff6624e0682b4e8a6262",
+              "02b933cb09a7fcfcdd3eee26"
+            ],
+            "retrieved_snippets": [
+              "Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. With a single attention head, averaging inhibits this. MultiHe...",
+              "Decoder: The decoder is also composed of a stack of N = 6 identical layers. In addition to the two sub-layers in each encoder layer, the decoder inserts a third sub-layer, which performs multi-head...",
+              "Figure 2: (left) Scaled Dot-Product Attention. (right) Multi-Head Attention consists of several attention layers running in parallel. of the values, where the weight assigned to each value is compu...",
+              "Instead of performing a single attention function with d model -dimensional keys, values and queries, we found it beneficial to linearly project the queries, keys and values h times with different,...",
+              "The two most commonly used attention functions are additive attention [ 2 ], and dot-product (multi- plicative) attention. Dot-product attention is identical to our algorithm, except for the scalin..."
+            ],
+            "similarity_scores": [
+              0.3760270662155631,
+              0.013102480112306972,
+              0.005208333333333333,
+              0.0051387461459403904,
+              0.01680672268907563
+            ],
+            "top_similarity": 0.3760270662155631
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "bn-internal-shift",
+            "latency_ms": 24.53166698978748,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.9999901112763545,
+            "query": "What phenomenon does batch normalization seek to reduce?",
+            "retrieved_fingerprints": [
+              "e32d9f1889d59cccc310a9e1",
+              "1c152fffb8771b8f92eb08a7",
+              "1136b15dad197a1d9c05619b",
+              "4c3d92635d059c65665236a6",
+              "0011f1f39398af60f3eb1e3d"
+            ],
+            "retrieved_snippets": [
+              "In traditional deep networks, too-high learning rate may result in the gradients that explode or vanish, as well as getting stuck in poor local minima. Batch Normaliza- tion helps address these iss...",
+              "Interestingly, our method bears similarity to the stan- dardization layer of (G\u00a8ulc\u00b8ehre & Bengio, 2013), though the two methods stem from very different goals, and per- form different tasks. The g...",
+              "Simply adding Batch Normalization to a network does not take full advantage of our method. To do so, we further changed the network and its training parameters, as fol- lows: Increase learning rate...",
+              "Simply adding Batch Normalization to a network does not take full advantage of our method. To do so, we further changed the network and its training parameters, as fol- lows: Increase learning rate...",
+              "Simply adding Batch Normalization to a network does not take full advantage of our method. To do so, we further changed the network and its training parameters, as fol- lows: Increase learning rate..."
+            ],
+            "similarity_scores": [
+              0.02463768115942029,
+              0.015710919088766692,
+              0.005373936408419167,
+              0.00530035335689046,
+              0.005309734513274336
+            ],
+            "top_similarity": 0.02463768115942029
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "resnet-imagenet-error",
+            "latency_ms": 24.627499995403923,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.5637341844118282,
+            "query": "What ImageNet test error does the residual net ensemble achieve?",
+            "retrieved_fingerprints": [
+              "298447dd7aae698defc16e1b",
+              "aaa5215880b879b76b388ff1",
+              "52614438d42c666ae0c541ab",
+              "09b1f6d57f15e5bfb0d7b21f",
+              "b4ed472b8491b8af2c4f2985"
+            ],
+            "retrieved_snippets": [
+              "VGG [41] (ILSVRC\u201914) 7.32 GoogLeNet [44] (ILSVRC\u201914) 6.66 VGG [41] (v5) 6.8 PReLU-net [13] 4.94 BN-inception [16] 4.82 ResNet (ILSVRC\u201915) 3.57 Table 5. Error rates (%) of ensembles . The top-5 erro...",
+              "Table 2. Top-1 error (%, 10-crop testing) on ImageNet validation. Here the ResNets have no extra parameter compared to their plain counterparts. Fig. 4 shows the training procedures. 34-layer plain...",
+              "We evaluate our method on the ImageNet 2012 classi\ufb01- cation dataset [36] that consists of 1000 classes. The models are trained on the 1.28 million training images, and evalu- ated on the 50k valida...",
+              "Table 1. Architectures for ImageNet. Building blocks are shown in brackets (see also Fig. 5), with the numbers of blocks stacked. Down- sampling is performed by conv3 1, conv4 1, and conv5 1 with a...",
+              "Comparisons with State-of-the-art Methods. In Table 4 we compare with the previous best single-model results. Our baseline 34-layer ResNets have achieved very compet- itive accuracy. Our 152-layer..."
+            ],
+            "similarity_scores": [
+              0.009395973154362415,
+              0.010286554004408524,
+              0.00844475721323012,
+              0.015482054890921885,
+              0.08054711246200608
+            ],
+            "top_similarity": 0.08054711246200608
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "bert-acronym",
+            "latency_ms": 23.072374999173917,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.872942053263065,
+            "query": "What does the acronym BERT stand for?",
+            "retrieved_fingerprints": [
+              "73f65e1171e68defaedf7fce",
+              "6ec7abaf59cc31806b729ca4",
+              "6a4787b852d330ddbb895246",
+              "054d552919246f16dec9a96d",
+              "6b707c8b7467006b9c2c4623"
+            ],
+            "retrieved_snippets": [
+              "We organize the appendix into three sections: \u2022 Additional implementation details for BERT are presented in Appendix A ; \u2022 Additional details for our experiments are presented in Appendix B ; and \u2022...",
+              "Ours BERT LARGE (Single) 78.7 81.9 80.0 83.1 Table 3: SQuAD 2.0 results. We exclude entries that use BERT as one of their components. tuning data, we only lose 0.1-0.4 F1, still outper- forming all...",
+              "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding Jacob Devlin Ming-Wei Chang Kenton Lee Kristina Toutanova Google AI Language { jacobdevlin,mingweichang,kentonl,kris...",
+              "BERT is conceptually simple and empirically powerful. It obtains new state-of-the-art re- sults on eleven natural language processing tasks, including pushing the GLUE score to 80.5% (7.7% point ab...",
+              "\u2022 BERT advances the state of the art for eleven NLP tasks. The code and pre-trained mod- els are available at https://github.com/ google-research/bert . 2 Related Work There is a long history of pr..."
+            ],
+            "similarity_scores": [
+              0.088715953307393,
+              0.1291759465478842,
+              0.17735334242837653,
+              0.12460567823343849,
+              0.1497872340425532
+            ],
+            "top_similarity": 0.17735334242837653
+          },
+          {
+            "hit_at_k": 0.0,
+            "id": "deeplab-decoder",
+            "latency_ms": 24.596458999440074,
+            "match_strategy": "passage",
+            "ndcg_at_k": 0.8020027953057931,
+            "query": "What module does DeepLabv3+ add to improve segmentation boundaries?",
+            "retrieved_fingerprints": [
+              "8c5072b45869404fb4df7d88",
+              "064e41e7cd4619c0e1666bd6",
+              "62b4abfa0e8afedf8969d0ee",
+              "97ae199bf7c857897ded3712",
+              "9c89a271a1df4a67971c174f"
+            ],
+            "retrieved_snippets": [
+              "We de\ufb01ne \u201cDeepLabv3 feature map\u201d as the last feature map computed by DeepLabv3 ( i.e ., the features containing ASPP features and image-level fea- tures), and [ k \u00d7 k, f ] as a convolution operatio...",
+              "We de\ufb01ne \u201cDeepLabv3 feature map\u201d as the last feature map computed by DeepLabv3 ( i.e ., the features containing ASPP features and image-level fea- tures), and [ k \u00d7 k, f ] as a convolution operatio...",
+              "4 L.-C Chen, Y. Zhu, G. Papandreou, F. Schro\ufb00, and H. Adam 1x1 Conv 3x3 Conv rate 6 3x3 Conv rate 12 3x3 Conv rate 18 Image Pooling 1x1 Conv 1x1 Conv Low-Level Features Upsample by 4 Concat 3x3 Con...",
+              "Abstract. Spatial pyramid pooling module or encode-decoder structure are used in deep neural networks for semantic segmentation task. The former networks are able to encode multi-scale contextual i...",
+              "(a) val set results (b) test set results Table 7. (a) DeepLabv3+ on the Cityscapes val set when trained with train \ufb01ne set. (b) DeepLabv3+ on Cityscapes test set. Coarse : Use train extra set (coar..."
+            ],
+            "similarity_scores": [
+              0.07967881408276714,
+              0.08565737051792828,
+              0.21940298507462686,
+              0.1407437025189924,
+              0.14545454545454545
+            ],
+            "top_similarity": 0.21940298507462686
+          }
+        ]
+      },
+      "details": [
+        "hit@5 below threshold 0.000< 0.7",
+        "avg top similarity 0.174< 0.82"
+      ],
+      "duration_seconds": 0.1866501269832952,
+      "metrics": {
+        "hit_at_k_avg": 0.0,
+        "latency_ms_all": [
+          36.45374999905471,
+          26.980209004250355,
+          26.388166996184736,
+          24.53166698978748,
+          24.627499995403923,
+          23.072374999173917,
+          24.596458999440074
+        ],
+        "latency_p50_ms": 24.627499995403923,
+        "latency_p95_ms": 33.611687700613395,
+        "ndcg_at_k_avg": 0.8658510662839706,
+        "queries_run": 7,
+        "top_similarity_all": [
+          0.2230971128608924,
+          0.11871227364185111,
+          0.3760270662155631,
+          0.02463768115942029,
+          0.08054711246200608,
+          0.17735334242837653,
+          0.21940298507462686
+        ],
+        "top_similarity_avg": 0.17425393912039092
+      },
+      "status": "failed"
+    }
+  },
+  "timestamp": "2025-10-18T01:05:30.644057+00:00"
+}

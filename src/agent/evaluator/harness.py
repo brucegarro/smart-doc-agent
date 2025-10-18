@@ -59,6 +59,8 @@ class EvaluatorConfig:
     answer_similarity_threshold: float = 0.55
     answer_improvement_margin: float = 0.05
     answer_improvement_rate_threshold: float = 0.5
+    answer_judge_pass_threshold: float = 0.7
+    answer_judge_pass_rate_threshold: float = 0.6
 
     @classmethod
     def from_env(cls) -> "EvaluatorConfig":
@@ -104,6 +106,8 @@ class EvaluatorConfig:
         answer_similarity_threshold = float(os.getenv("EVAL_ANSWER_SIMILARITY_MIN", "0.55"))
         answer_improvement_margin = float(os.getenv("EVAL_ANSWER_IMPROVEMENT_MARGIN", "0.05"))
         answer_improvement_rate_threshold = float(os.getenv("EVAL_ANSWER_IMPROVEMENT_RATE_MIN", "0.5"))
+        answer_judge_pass_threshold = float(os.getenv("EVAL_ANSWER_JUDGE_PASS_THRESHOLD", "0.7"))
+        answer_judge_pass_rate_threshold = float(os.getenv("EVAL_ANSWER_JUDGE_PASS_RATE_MIN", "0.6"))
 
         return cls(
             fixtures_root=fixtures_root,
@@ -134,6 +138,8 @@ class EvaluatorConfig:
             answer_similarity_threshold=answer_similarity_threshold,
             answer_improvement_margin=answer_improvement_margin,
             answer_improvement_rate_threshold=answer_improvement_rate_threshold,
+            answer_judge_pass_threshold=answer_judge_pass_threshold,
+            answer_judge_pass_rate_threshold=answer_judge_pass_rate_threshold,
         )
 
     @staticmethod
