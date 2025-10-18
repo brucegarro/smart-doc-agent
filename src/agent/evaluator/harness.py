@@ -24,6 +24,7 @@ from agent.evaluator.ingestion_runner import IngestionScenarioRunner
 from agent.evaluator.models import ScenarioResult
 from agent.evaluator.quality_runner import CodeQualityRunner
 from agent.evaluator.query_runner import QueryScenarioRunner
+from agent.evaluator.answer_runner import AnswerScenarioRunner
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,12 @@ class EvaluatorConfig:
     complexity_function_threshold: float = 10.0
     complexity_average_threshold: float = 5.0
     maintainability_threshold: float = 65.0
+    answer_context_limit: int = 3
+    answer_max_tokens: int = 256
+    answer_temperature: float = 0.2
+    answer_similarity_threshold: float = 0.55
+    answer_improvement_margin: float = 0.05
+    answer_improvement_rate_threshold: float = 0.5
 
     @classmethod
     def from_env(cls) -> "EvaluatorConfig":
@@ -91,6 +98,12 @@ class EvaluatorConfig:
         complexity_function_threshold = float(os.getenv("EVAL_COMPLEXITY_FUNCTION_MAX", "10"))
         complexity_average_threshold = float(os.getenv("EVAL_COMPLEXITY_AVG_MAX", "5"))
         maintainability_threshold = float(os.getenv("EVAL_MAINTAINABILITY_MIN", "65"))
+        answer_context_limit = int(os.getenv("EVAL_ANSWER_CONTEXT_LIMIT", "3"))
+        answer_max_tokens = int(os.getenv("EVAL_ANSWER_MAX_TOKENS", "256"))
+        answer_temperature = float(os.getenv("EVAL_ANSWER_TEMPERATURE", "0.2"))
+        answer_similarity_threshold = float(os.getenv("EVAL_ANSWER_SIMILARITY_MIN", "0.55"))
+        answer_improvement_margin = float(os.getenv("EVAL_ANSWER_IMPROVEMENT_MARGIN", "0.05"))
+        answer_improvement_rate_threshold = float(os.getenv("EVAL_ANSWER_IMPROVEMENT_RATE_MIN", "0.5"))
 
         return cls(
             fixtures_root=fixtures_root,
@@ -115,6 +128,12 @@ class EvaluatorConfig:
             complexity_function_threshold=complexity_function_threshold,
             complexity_average_threshold=complexity_average_threshold,
             maintainability_threshold=maintainability_threshold,
+            answer_context_limit=answer_context_limit,
+            answer_max_tokens=answer_max_tokens,
+            answer_temperature=answer_temperature,
+            answer_similarity_threshold=answer_similarity_threshold,
+            answer_improvement_margin=answer_improvement_margin,
+            answer_improvement_rate_threshold=answer_improvement_rate_threshold,
         )
 
     @staticmethod
@@ -174,6 +193,7 @@ class Evaluator:
         self._ingestion_runner = IngestionScenarioRunner(self.config, self.processor)
         self._query_runner = QueryScenarioRunner(self.config, self._load_jsonl, self._percentile)
         self._quality_runner = CodeQualityRunner(self.config)
+        self._answer_runner = AnswerScenarioRunner(self.config, self._load_jsonl)
 
     def run(self) -> int:
         logger.info("Starting evaluator run %s", self.config.run_id)
@@ -191,8 +211,7 @@ class Evaluator:
             quality_result = self._run_code_quality_suite()
             scenario_results[quality_result.name] = quality_result
             if quality_result.status == "failed":
-                logger.error("Code quality checks failed; aborting evaluation")
-                return self._finalize_run(scenario_results, ingestion_doc_ids)
+                logger.error("Code quality checks failed; continuing to capture downstream metrics")
 
             db_setup_result = self._db_manager.prepare()
             scenario_results[db_setup_result.name] = db_setup_result
@@ -207,6 +226,9 @@ class Evaluator:
 
                 query_result = self._run_query_suite(ingestion_doc_ids)
                 scenario_results[query_result.name] = query_result
+
+                answer_result = self._run_answer_suite(query_result.artifacts.get("queries", []) if query_result.artifacts else [])
+                scenario_results[answer_result.name] = answer_result
 
                 extraction_result = self._run_extraction_suite()
                 scenario_results[extraction_result.name] = extraction_result
@@ -281,6 +303,17 @@ class Evaluator:
         self._perf_samples["query_latencies_ms"] = outcome.latencies_ms
         return ScenarioResult(
             name="queries",
+            status=outcome.status,
+            metrics=outcome.metrics,
+            details=outcome.details,
+            duration_seconds=outcome.duration_seconds,
+            artifacts=outcome.artifacts,
+        )
+
+    def _run_answer_suite(self, query_artifacts: List[Dict[str, Any]]) -> ScenarioResult:
+        outcome = self._answer_runner.run(query_artifacts)
+        return ScenarioResult(
+            name="answers",
             status=outcome.status,
             metrics=outcome.metrics,
             details=outcome.details,
@@ -371,7 +404,7 @@ class Evaluator:
     def _build_scorecard(self, scenarios: Dict[str, ScenarioResult]) -> Dict[str, Any]:
         scenario_payload = {name: self._scenario_to_dict(result) for name, result in scenarios.items()}
 
-        gating_names = ["boot", "code_quality", "ingestion", "queries", "extraction", "math", "perf"]
+        gating_names = ["boot", "code_quality", "ingestion", "queries", "answers", "extraction", "math", "perf"]
         gates: Dict[str, bool] = {}
         hard_fail = False
         for name in gating_names:
@@ -417,6 +450,12 @@ class Evaluator:
                 "complexity_function_threshold": self.config.complexity_function_threshold,
                 "complexity_average_threshold": self.config.complexity_average_threshold,
                 "maintainability_threshold": self.config.maintainability_threshold,
+                "answer_context_limit": self.config.answer_context_limit,
+                "answer_max_tokens": self.config.answer_max_tokens,
+                "answer_temperature": self.config.answer_temperature,
+                "answer_similarity_threshold": self.config.answer_similarity_threshold,
+                "answer_improvement_margin": self.config.answer_improvement_margin,
+                "answer_improvement_rate_threshold": self.config.answer_improvement_rate_threshold,
             },
             "gates": gates,
             "metrics": metrics,
