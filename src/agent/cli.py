@@ -16,6 +16,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from agent.config import settings
+from agent.ingestion.batch_runner import BatchIngestionRunner, BatchJobResult
 from agent.ingestion.processor import ParallelIngestSummary, processor
 from agent.retrieval.search import search_chunks
 
@@ -134,27 +135,47 @@ def _process_pdfs(
     source: Optional[str],
     verbose: bool,
     workers: int,
-) -> dict[str, list[tuple[str, str]]]:
-    results = {"success": [], "failed": [], "skipped": [], "queued": []}
+    queue_mode: Optional[bool],
+    wait: bool,
+    timeout: float,
+    poll_interval: float,
+) -> tuple[dict[str, list[tuple[str, str]]], Optional[list[BatchJobResult]]]:
+    results = {"success": [], "failed": [], "skipped": [], "queued": [], "timeout": []}
+    wait_results: Optional[list[BatchJobResult]] = None
 
-    if len(pdf_files) > 1 or workers > 1:
+    should_queue = queue_mode if queue_mode is not None else (len(pdf_files) > 1 or workers > 1 or wait)
+
+    if should_queue:
         console.print(
             "Enqueuing PDFs for background ingestion via Redis queue\n"
         )
-        summary = processor.process_pdfs_parallel(
+        batch_runner = BatchIngestionRunner(processor)
+        summary = batch_runner.enqueue(
             pdf_files,
             source_name=source,
             max_workers=workers,
         )
+
+        if wait:
+            queued_jobs = [item for item in summary.items if item.status == "queued"]
+            console.print(f"Waiting for up to {timeout:.0f}s for {len(queued_jobs)} queued job(s) to finish...\n")
+            wait_results = batch_runner.wait_for_jobs(
+                summary,
+                timeout=timeout,
+                poll_interval=poll_interval,
+            )
+            _log_wait_results(wait_results, results, verbose)
+            return results, wait_results
+
         _log_parallel_results(pdf_files, summary, results, verbose)
-        return results
+        return results, None
 
     for idx, pdf_file in enumerate(pdf_files, start=1):
         console.print(f"[{idx}/{len(pdf_files)}] Processing: [cyan]{pdf_file.name}[/cyan]")
         bucket, payload = _handle_pdf_ingest(pdf_file, source, verbose)
         results[bucket].append(payload)
 
-    return results
+    return results, None
 
 
 def _log_parallel_results(
@@ -186,6 +207,45 @@ def _log_parallel_results(
             results["failed"].append((pdf_name, reason))
 
 
+def _log_wait_results(
+    job_results: list[BatchJobResult],
+    results: dict[str, list[tuple[str, str]]],
+    verbose: bool,
+) -> None:
+    total = len(job_results)
+    for idx, job_result in enumerate(job_results, start=1):
+        pdf_name = job_result.pdf_path.name
+        console.print(f"[{idx}/{total}] Processing: [cyan]{pdf_name}[/cyan]")
+
+        if job_result.status == "succeeded" and job_result.doc_id:
+            console.print(f"  ✓ Success → [green]{job_result.doc_id}[/green]\n")
+            results["success"].append((pdf_name, job_result.doc_id))
+            continue
+
+        if job_result.status == "skipped":
+            reason = job_result.message or "Skipped"
+            console.print(f"  ⊘ Skipped: [yellow]{reason}[/yellow]\n")
+            results["skipped"].append((pdf_name, reason))
+            continue
+
+        if job_result.status == "timeout":
+            reason = job_result.message or "Timed out"
+            console.print(f"  ⏱ Timeout: [magenta]{reason}[/magenta]\n")
+            results["timeout"].append((pdf_name, reason))
+            if verbose:
+                logger.warning("Job %s timed out for %s", job_result.job_id, pdf_name)
+            continue
+
+        if job_result.status == "succeeded":
+            reason = job_result.message or "Missing document ID"
+        else:
+            reason = job_result.message or job_result.status.capitalize()
+        console.print(f"  ✗ Failed: [red]{reason}[/red]\n")
+        if verbose and job_result.message:
+            logger.error("Job %s failed for %s: %s", job_result.job_id, pdf_name, job_result.message)
+        results["failed"].append((pdf_name, reason))
+
+
 def _handle_pdf_ingest(pdf_file: Path, source: Optional[str], verbose: bool) -> tuple[str, tuple[str, str]]:
     try:
         doc_id = processor.process_pdf(pdf_file, source_name=source)
@@ -209,6 +269,7 @@ def _print_ingest_summary(results: dict[str, list[tuple[str, str]]]) -> None:
         ("queued", "↻ Queued", "cyan"),
         ("success", "✓ Success", "green"),
         ("skipped", "⊘ Skipped", "yellow"),
+        ("timeout", "⏱ Timeout", "magenta"),
         ("failed", "✗ Failed", "red"),
     ]
 
@@ -253,7 +314,29 @@ def ingest(
         "-w",
         min=1,
         help="Number of parallel workers to use"
-    )
+    ),
+    queue: Optional[bool] = typer.Option(
+        None,
+        "--queue/--no-queue",
+        help="Force enqueuing PDFs via Redis workers (defaults to auto-detect)",
+    ),
+    wait: bool = typer.Option(
+        False,
+        "--wait/--no-wait",
+        help="Wait for queued ingestion jobs to finish",
+    ),
+    timeout: float = typer.Option(
+        600.0,
+        "--timeout",
+        help="Maximum seconds to wait when --wait is enabled",
+        show_default=True,
+    ),
+    poll_interval: float = typer.Option(
+        5.0,
+        "--poll-interval",
+        help="Polling interval (seconds) while waiting for queued jobs",
+        show_default=True,
+    ),
 ):
     """
     Ingest PDF documents into the system.
@@ -262,14 +345,28 @@ def ingest(
     """
     profiler = _start_profiler_if_enabled()
     previous_level = _set_verbose_logging(verbose)
+    results: Optional[dict[str, list[tuple[str, str]]]] = None
     try:
-        _run_ingest_command(path, recursive, source, verbose, workers)
+        results, _ = _run_ingest_command(
+            path,
+            recursive,
+            source,
+            verbose,
+            workers,
+            queue,
+            wait,
+            timeout,
+            poll_interval,
+        )
     finally:
         if profiler is not None:
             profiler.disable()
         if previous_level is not None:
             logging.getLogger().setLevel(previous_level)
         _emit_profile_summary(profiler)
+
+    if results and (results["failed"] or results["timeout"]):
+        raise typer.Exit(code=1)
 
 
 def _run_ingest_command(
@@ -278,13 +375,27 @@ def _run_ingest_command(
     source: Optional[str],
     verbose: bool,
     workers: int,
-) -> None:
+    queue: Optional[bool],
+    wait: bool,
+    timeout: float,
+    poll_interval: float,
+) -> tuple[dict[str, list[tuple[str, str]]], Optional[list[BatchJobResult]]]:
     console.print("\n[bold blue]📄 PDF Ingestion Pipeline[/bold blue]\n")
     pdf_files = _collect_pdf_files(path, recursive)
     console.print(f"Found [cyan]{len(pdf_files)}[/cyan] PDF file(s)\n")
 
-    results = _process_pdfs(pdf_files, source, verbose, workers)
+    results, wait_results = _process_pdfs(
+        pdf_files,
+        source,
+        verbose,
+        workers,
+        queue_mode=queue,
+        wait=wait,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
     _print_ingest_summary(results)
+    return results, wait_results
 
 
 @app.command()

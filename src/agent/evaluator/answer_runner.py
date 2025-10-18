@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
+from agent.config import settings
 from agent.llm import LLMGenerationError, text_llm_client
 from agent.retrieval.search import search_chunks
 
@@ -295,6 +296,7 @@ class AnswerScenarioRunner:
                 system=self._judge_system_prompt,
                 temperature=0.0,
                 max_tokens=128,
+                model=settings.answer_judge_model,
             )
         except LLMGenerationError as exc:
             return None, None, f"judge:{exc}"

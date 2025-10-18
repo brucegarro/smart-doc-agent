@@ -46,6 +46,7 @@ class TextLLMClient:
         system: Optional[str] = None,
         temperature: float = 0.2,
         max_tokens: int = 256,
+        model: Optional[str] = None,
     ) -> str:
         messages: List[dict[str, str]] = []
         if system:
@@ -72,7 +73,7 @@ class TextLLMClient:
                 break
             try:
                 response = client.chat(  # type: ignore[operator]
-                    model=settings.text_llm_model,
+                    model=model or settings.text_llm_model,
                     messages=messages,
                     options=options,
                     stream=False,

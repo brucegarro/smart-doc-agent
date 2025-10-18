@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING, Dict, Any
 
 from agent.db import get_db_connection
+from agent.ingestion.batch_runner import BatchIngestionRunner, BatchJobResult
 from agent.ingestion.processor import DocumentProcessor
 
 from agent.evaluator.models import IngestionRecord, ScenarioResult
@@ -23,7 +23,7 @@ class IngestionScenarioRunner:
 
     def __init__(self, config: "EvaluatorConfig", processor: DocumentProcessor) -> None:
         self._config = config
-        self._processor = processor
+        self._batch_runner = BatchIngestionRunner(processor)
 
     def run(self) -> Tuple[ScenarioResult, List[str], List[float]]:
         docs = self._ingestion_fixtures()
@@ -41,7 +41,17 @@ class IngestionScenarioRunner:
             )
 
         logger.info("Ingestion scenario starting with %s document(s)", len(docs))
-        records = [self._ingest_document(path) for path in docs]
+        summary = self._batch_runner.enqueue(
+            docs,
+            source_name="eval-fixture",
+            max_workers=max(1, len(docs)),
+        )
+        job_results = self._batch_runner.wait_for_jobs(
+            summary,
+            timeout=self._config.wait_timeout,
+            poll_interval=self._config.poll_interval,
+        )
+        records = self._records_from_batch_results(job_results)
 
         doc_ids = [record.doc_id for record in records if record.doc_id]
         error_records = [record for record in records if record.error]
@@ -70,22 +80,52 @@ class IngestionScenarioRunner:
     def _ingestion_fixtures(self) -> List[Path]:
         return sorted(self._config.fixtures_docs.glob("*.pdf"))
 
-    def _ingest_document(self, doc_path: Path) -> IngestionRecord:
-        start = time.perf_counter()
-        try:
-            doc_id = self._processor.process_pdf(doc_path, source_name="eval-fixture")
-            elapsed = time.perf_counter() - start
-            logger.info("Ingested %s → %s in %.2fs", doc_path.name, doc_id, elapsed)
-            return IngestionRecord(path=doc_path, elapsed=elapsed, doc_id=doc_id)
-        except ValueError as dup_err:
-            elapsed = time.perf_counter() - start
-            logger.info("Skipping duplicate fixture %s (%s)", doc_path.name, dup_err)
-            return IngestionRecord(path=doc_path, elapsed=elapsed, duplicate=True)
-        except Exception as exc:  # noqa: BLE001 - evaluation should continue collecting failures
-            elapsed = time.perf_counter() - start
-            failure_msg = f"{doc_path.name}:{exc}"[:512]
-            logger.exception("Failed to ingest %s", doc_path.name)
-            return IngestionRecord(path=doc_path, elapsed=elapsed, error=failure_msg)
+    def _records_from_batch_results(self, results: List[BatchJobResult]) -> List[IngestionRecord]:
+        records: List[IngestionRecord] = []
+        for job in results:
+            elapsed = job.elapsed
+            if job.status == "succeeded" and job.doc_id:
+                logger.info("Ingested %s → %s in %.2fs", job.pdf_path.name, job.doc_id, elapsed)
+                records.append(
+                    IngestionRecord(path=job.pdf_path, elapsed=elapsed, doc_id=job.doc_id)
+                )
+                continue
+
+            if job.status == "skipped":
+                reason = job.message or "duplicate"
+                logger.info("Skipping duplicate fixture %s (%s)", job.pdf_path.name, reason)
+                records.append(
+                    IngestionRecord(
+                        path=job.pdf_path,
+                        elapsed=elapsed,
+                        duplicate=True,
+                    )
+                )
+                continue
+
+            if job.status == "timeout":
+                message = job.message or "Timed out"
+                logger.error("Timed out ingesting %s: %s", job.pdf_path.name, message)
+                records.append(
+                    IngestionRecord(
+                        path=job.pdf_path,
+                        elapsed=elapsed,
+                        error=message,
+                    )
+                )
+                continue
+
+            message = job.message or job.status.capitalize()
+            logger.error("Failed to ingest %s: %s", job.pdf_path.name, message)
+            records.append(
+                IngestionRecord(
+                    path=job.pdf_path,
+                    elapsed=elapsed,
+                    error=message,
+                )
+            )
+
+        return records
 
     def _ingestion_metrics(
         self,

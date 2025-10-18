@@ -448,6 +448,7 @@ class Evaluator:
             "env": {
                 "git_sha": self.config.git_sha,
                 "text_llm_model": settings.text_llm_model,
+                "answer_judge_model": settings.answer_judge_model,
                 "vlm_model": settings.vlm_model,
                 "embedder_model": settings.embedder_model,
                 "retrieval_k": self.config.retrieval_k,

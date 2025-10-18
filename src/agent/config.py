@@ -66,6 +66,7 @@ if BaseSettings is not None:
         # Models - Ollama
         ollama_base: str = "http://ollama:11434"
         text_llm_model: str = "qwen2.5:7b-instruct-q4_K_M"
+        answer_judge_model: str = "qwen2.5:1.5b-instruct-q4_K_M"
         vlm_model: str = "qwen2-vl:7b-instruct-q4_K_M"
 
         # Embedder (local)
@@ -146,6 +147,7 @@ else:
             # Models - Ollama
             "ollama_base": "http://ollama:11434",
             "text_llm_model": "qwen2.5:7b-instruct-q4_K_M",
+            "answer_judge_model": "qwen2.5:1.5b-instruct-q4_K_M",
             "vlm_model": "qwen2-vl:7b-instruct-q4_K_M",
             # Embedder
             "embedder_provider": "local",
